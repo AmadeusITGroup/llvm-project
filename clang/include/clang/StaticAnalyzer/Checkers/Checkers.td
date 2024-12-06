@@ -24,6 +24,8 @@ def CoreBuiltin : Package<"builtin">, ParentPackage<Core>, Hidden;
 def CoreUninitialized  : Package<"uninitialized">, ParentPackage<Core>;
 def CoreAlpha : Package<"core">, ParentPackage<Alpha>;
 
+def Amadeus : Package<"amadeus">;
+
 // The OptIn package is for checkers that are not alpha and that would normally
 // be on by default but where the driver does not have enough information to
 // determine when they are applicable. For example, localizability checkers fit
@@ -119,6 +121,19 @@ def FuchsiaAlpha : Package<"fuchsia">, ParentPackage<Alpha>;
 
 def WebKit : Package<"webkit">;
 def WebKitAlpha : Package<"webkit">, ParentPackage<Alpha>;
+
+
+//===----------------------------------------------------------------------===//
+// Amadeus Checkers.
+//===----------------------------------------------------------------------===//
+
+let ParentPackage = Amadeus in {
+
+def NullablePointersChecker : Checker<"NullablePointers">,
+  HelpText<"Checking of nullable pointers">,
+  Documentation<NotDocumented>;
+
+}
 
 //===----------------------------------------------------------------------===//
 // Core Checkers.

@@ -225,6 +225,7 @@ public:
                                    unsigned count);
 
   DefinedSVal getMemberPointer(const NamedDecl *ND);
+  DefinedSVal getUnknownMemberPointer();
 
   DefinedSVal getFunctionPointer(const FunctionDecl *func);
 
@@ -341,6 +342,7 @@ public:
     // We cannot use the `isAnyPointerType()`.
     assert((type->isPointerType() || type->isObjCObjectPointerType() ||
             type->isBlockPointerType() || type->isNullPtrType() ||
+            type->isMemberPointerType() ||
             type->isReferenceType()) &&
            "makeNullWithType must use pointer type");
 

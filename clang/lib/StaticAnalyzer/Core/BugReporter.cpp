@@ -918,6 +918,15 @@ void PathDiagnosticBuilder::generateMinimalDiagForBlockEdge(
     if (!C.supportsLogicalOpControlFlow())
       break;
 
+    const bool IsLoopGuard = [T]() {
+      const auto *BO = cast<BinaryOperator>(T);
+      if (BO->getLHS()->getStmtClass() != Stmt::CallExprClass) return false;
+      auto *C = cast<CallExpr>(BO->getLHS());
+      return C->getDirectCallee()->getNameAsString() == "__loop__guard__";
+    }();
+    if (IsLoopGuard) break;
+
+
     C.getActivePath().push_front(generateDiagForBinaryOP(C, T, Src, Dst));
     break;
   }

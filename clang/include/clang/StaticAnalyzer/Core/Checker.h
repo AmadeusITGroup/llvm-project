@@ -283,6 +283,22 @@ public:
   }
 };
 
+class LoopCondition {
+  template <typename CHECKER>
+  static void _checkLoopCondition(void *checker, const Stmt *Loop, const Stmt *Condition,
+                                    CheckerContext & C) {
+    ((const CHECKER *)checker)->checkLoopCondition(Loop, Condition, C);
+  }
+
+public:
+  template <typename CHECKER>
+  static void _register(CHECKER *checker, CheckerManager &mgr) {
+    mgr._registerForLoopCondition(
+      CheckerManager::CheckLoopConditionFunc(checker,
+                                               _checkLoopCondition<CHECKER>));
+  }
+};
+
 class NewAllocator {
   template <typename CHECKER>
   static void _checkNewAllocator(void *checker, const CXXAllocatorCall &Call,

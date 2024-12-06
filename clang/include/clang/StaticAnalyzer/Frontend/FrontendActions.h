@@ -27,6 +27,8 @@ class AnalysisAction : public ASTFrontendAction {
 protected:
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override;
+public:
+  bool hasCodeCompletionSupport() const override { return true; }
 };
 
 /// Frontend action to parse model files.

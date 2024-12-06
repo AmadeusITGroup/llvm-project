@@ -408,6 +408,15 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
                                   BinaryOperator::Opcode op,
                                   NonLoc lhs, NonLoc rhs,
                                   QualType resultTy)  {
+  // llvm::outs() << "SVAL BUILDER :: evalBinOpNN\n";
+  // llvm::outs() << "lhs sval: ";
+  // lhs.dump();
+  // llvm::outs() << "\n";
+  // llvm::outs() << "rhs sval: ";
+  // rhs.dump();
+  // llvm::outs() << "\n";
+  // llvm::outs() << "END SVAL BUILDER\n\n";
+
   NonLoc InputLHS = lhs;
   NonLoc InputRHS = rhs;
 
@@ -453,6 +462,8 @@ SVal SimpleSValBuilder::evalBinOpNN(ProgramStateRef state,
              "Both SVals should have pointer-to-member-type");
       auto LPTM = lhs.castAs<nonloc::PointerToMember>(),
            RPTM = rhs.castAs<nonloc::PointerToMember>();
+      // if (LPTM.isUnknownMemberPointer() || RPTM.isUnknownMemberPointer())
+      //   return makeSymExprValNN(op, lhs, rhs, resultTy);
       auto LPTMD = LPTM.getPTMData(), RPTMD = RPTM.getPTMData();
       switch (op) {
         case BO_EQ:
@@ -764,13 +775,23 @@ SVal SimpleSValBuilder::evalBinOpLL(ProgramStateRef state,
                                   BinaryOperator::Opcode op,
                                   Loc lhs, Loc rhs,
                                   QualType resultTy) {
+  // llvm::outs() << "SVAL BUILDER :: evalBinOpLL : lhs: ";
+  // lhs.dump();
+  // llvm::outs() << "\n";
+  // llvm::outs() << "SVAL BUILDER :: evalBinOpLL : rhs: ";
+  // rhs.dump();
+  // llvm::outs() << "\n";
+  // llvm::outs() << "SVAL BUILDER :: evalBinOpLL : resultTy: \n";
+  // resultTy.dump();
+  // llvm::outs() << "\n";
 
   // Assert that bitwidth of lhs and rhs are the same.
   // This can happen if two different address spaces are used,
   // and the bitwidths of the address spaces are different.
   // See LIT case clang/test/Analysis/cstring-checker-addressspace.c
   // FIXME: See comment above in the function assertEqualBitWidths
-  assertEqualBitWidths(state, rhs, lhs);
+  if (op != BO_PtrMemD && op != BO_PtrMemI)
+    assertEqualBitWidths(state, rhs, lhs);
 
   // Only comparisons and subtractions are valid operations on two pointers.
   // See [C99 6.5.5 through 6.5.14] or [C++0x 5.6 through 5.15].

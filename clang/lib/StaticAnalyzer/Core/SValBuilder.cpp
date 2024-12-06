@@ -144,13 +144,29 @@ SValBuilder::getRegionValueSymbolVal(const TypedValueRegion *region) {
   if (T->isNullPtrType())
     return makeZeroVal(T);
 
-  if (!SymbolManager::canSymbolicate(T))
+  auto CT = T.getCanonicalType();
+  const bool CanSymbolicate = SymbolManager::canSymbolicate(T) || CT->isMemberPointerType();
+
+  // if (!SymbolManager::canSymbolicate(T))
+  if (!CanSymbolicate)
+  {
+    // llvm::outs() << "SVAL BUILDER :: getRegionValueSymbolVal :: unable to symbolicate case\n";
     return UnknownVal();
+  }
 
   SymbolRef sym = SymMgr.getRegionValueSymbol(region);
+  // llvm::outs() << "SVAL BUILDER :: getRegionValueSymbolVal :: sym: ";
+  // sym->dump();
+  // llvm::outs() << "\n";
 
-  if (Loc::isLocType(T))
-    return loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
+  if (Loc::isLocType(T) || CT->isMemberPointerType())
+  {
+    auto V = loc::MemRegionVal(MemMgr.getSymbolicRegion(sym));
+    // llvm::outs() << "SVAL BUILDER :: getRegionValueSymbolVal :: returned loc::MemRegionVal: ";
+    // V.dump();
+    // llvm::outs() << "\n";
+    return V;
+  }
 
   return nonloc::SymbolVal(sym);
 }
@@ -280,6 +296,10 @@ DefinedSVal SValBuilder::getMemberPointer(const NamedDecl *ND) {
   }
 
   return nonloc::PointerToMember(ND);
+}
+
+DefinedSVal SValBuilder::getUnknownMemberPointer() {
+  return nonloc::PointerToMember(&nonloc::PointerToMember::UnknownData);
 }
 
 DefinedSVal SValBuilder::getFunctionPointer(const FunctionDecl *func) {
@@ -487,7 +507,7 @@ SVal SValBuilder::evalBinOp(ProgramStateRef state, BinaryOperator::Opcode op,
   if (lhs.isUndef() || rhs.isUndef())
     return UndefinedVal();
 
-  if (lhs.isUnknown() || rhs.isUnknown())
+  if (lhs.isPureUnknown() || rhs.isPureUnknown())
     return UnknownVal();
 
   if (isa<nonloc::LazyCompoundVal>(lhs) || isa<nonloc::LazyCompoundVal>(rhs)) {
@@ -712,6 +732,7 @@ public:
   SVal VisitLocMemRegionVal(loc::MemRegionVal V) {
     // Pointer to bool.
     if (CastTy->isBooleanType()) {
+      // llvm::outs() << "SVAL BUILDER :: EvalCastVisitor::VisitLocMemRegionVal :: cast to bool case\n";
       const MemRegion *R = V.getRegion();
       if (const FunctionCodeRegion *FTR = dyn_cast<FunctionCodeRegion>(R))
         if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(FTR->getDecl()))
@@ -729,9 +750,12 @@ public:
         // pointer widths. See the amdgcn opencl reproducer with
         // this change as an example: solver-sym-simplification-ptr-bool.cl
         if (!Ty->isReferenceType())
+        {
+          // llvm::outs() << "SVAL BUILDER :: EvalCastVisitor::VisitLocMemRegionVal :: make lon loc constraint case\n";
           return VB.makeNonLoc(
-              Sym, BO_NE, VB.getBasicValueFactory().getZeroWithTypeSize(Ty),
-              CastTy);
+            Sym, BO_NE, VB.getBasicValueFactory().getZeroWithTypeSize(Ty),
+            CastTy);
+        }
       }
       // Non-symbolic memory regions are always true.
       return VB.makeTruthVal(true, CastTy);
@@ -762,7 +786,7 @@ public:
     }
 
     // Pointer to pointer.
-    if (Loc::isLocType(CastTy)) {
+    if (Loc::isLocType(CastTy) || CastTy->isMemberPointerType()) {
 
       if (IsUnknownOriginalType) {
         // When retrieving symbolic pointer and expecting a non-void pointer,
@@ -774,7 +798,7 @@ public:
         // FIXME: We really need a single good function to perform casts for us
         // correctly every time we need it.
         const MemRegion *R = V.getRegion();
-        if (CastTy->isPointerType() && !CastTy->isVoidPointerType()) {
+        if ((CastTy->isPointerType() || CastTy->isMemberPointerType()) && !CastTy->isVoidPointerType()) {
           if (const auto *SR = dyn_cast<SymbolicRegion>(R)) {
             QualType SRTy = SR->getSymbol()->getType();
 
@@ -1092,5 +1116,14 @@ public:
 /// only. This behavior is uncertain and should be improved.
 SVal SValBuilder::evalCast(SVal V, QualType CastTy, QualType OriginalTy) {
   EvalCastVisitor TRV{*this, CastTy, OriginalTy};
-  return TRV.Visit(V);
+  auto CV = TRV.Visit(V);
+  // llvm::outs() << "SVAL BUILDER :: evalCast :: V: ";
+  // V.dump();
+  // llvm::outs() << "\n";
+
+  // llvm::outs() << "SVAL BUILDER :: evalCast :: return sval: ";
+  // CV.dump();
+  // llvm::outs() << "\n";
+
+  return CV;
 }

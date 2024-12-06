@@ -83,6 +83,13 @@ public:
   void Profile(llvm::FoldingSetNodeID& ID) { Profile(ID, store, region); }
 };
 
+struct UnknownPointerToMemberData : llvm::FoldingSetNode {
+  static void Profile(llvm::FoldingSetNodeID &ID) {
+    static int X;
+    ID.AddPointer(&X);
+  }
+};
+
 class PointerToMemberData : public llvm::FoldingSetNode {
   const NamedDecl *D;
   llvm::ImmutableList<const CXXBaseSpecifier *> L;

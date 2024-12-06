@@ -1381,6 +1381,11 @@ SVal RegionStoreManager::ArrayToPointer(Loc Array, QualType T) {
 //===----------------------------------------------------------------------===//
 
 SVal RegionStoreManager::getBinding(RegionBindingsConstRef B, Loc L, QualType T) {
+  // llvm::outs() << "REGION STORE :: getBinding ";
+  // llvm::outs() << "L: ";
+  // L.dump();
+  // llvm::outs() << "\n";
+
   assert(!isa<UnknownVal>(L) && "location unknown");
   assert(!isa<UndefinedVal>(L) && "location undefined");
 
@@ -1398,6 +1403,10 @@ SVal RegionStoreManager::getBinding(RegionBindingsConstRef B, Loc L, QualType T)
   }
 
   const MemRegion *MR = L.castAs<loc::MemRegionVal>().getRegion();
+  // llvm::outs() << "REGION STORE :: getBinding ";
+  // llvm::outs() << "MR: ";
+  // MR->dump();
+  // llvm::outs() << "\n";
 
   if (isa<BlockDataRegion>(MR)) {
     return UnknownVal();
@@ -1477,6 +1486,7 @@ SVal RegionStoreManager::getBinding(RegionBindingsConstRef B, Loc L, QualType T)
   }
 
   if (const VarRegion *VR = dyn_cast<VarRegion>(R)) {
+    // llvm::outs() << "REGION STORE :: getBinding :: VarRegion case\n";
     // FIXME: Here we actually perform an implicit conversion from the loaded
     // value to the variable type.  What we should model is stores to variables
     // that blow past the extent of the variable.  If the address of the
@@ -2181,12 +2191,21 @@ SVal RegionStoreManager::getBindingForObjCIvar(RegionBindingsConstRef B,
 SVal RegionStoreManager::getBindingForVar(RegionBindingsConstRef B,
                                           const VarRegion *R) {
 
+  // llvm::outs() << "REGION STORE :: getBindingForVar :: R: ";
+  // R->dump();
+  // llvm::outs() << "\n";
   // Check if the region has a binding.
   if (std::optional<SVal> V = B.getDirectBinding(R))
+  {
+    // llvm::outs() << "REGION STORE :: getBindingForVar :: direct binding case\n";
     return *V;
+  }
 
   if (std::optional<SVal> V = B.getDefaultBinding(R))
+  {
+    // llvm::outs() << "REGION STORE :: getBindingForVar :: default binding case\n";
     return *V;
+  }
 
   // Lazily derive a value for the VarRegion.
   const VarDecl *VD = R->getDecl();
@@ -2194,7 +2213,10 @@ SVal RegionStoreManager::getBindingForVar(RegionBindingsConstRef B,
 
   // Arguments are always symbolic.
   if (isa<StackArgumentsSpaceRegion>(MS))
+  {
+    // llvm::outs() << "REGION STORE :: getBindingForVar :: stack args space case\n";
     return svalBuilder.getRegionValueSymbolVal(R);
+  }
 
   // Is 'VD' declared constant?  If so, retrieve the constant value.
   if (VD->getType().isConstQualified()) {

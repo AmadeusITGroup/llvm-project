@@ -1,0 +1,332 @@
+#+TITLE: Complile-time null-safety in C++
+
+* Introduction
+
+Makes C++ null-safe - preventing dereferences of `nullptr` at compile time - by following
+the same approach as Kotlin: distinguishing between pointers that can have `nullptr` as value
+and those that are never `nullptr` and preventing dereferences of nullable pointers without
+proof of null-safety (e.g. via an if guard).
+
+* Definitions
+** <<def:1>> NullablePointer concept
+
+A /NullablePointer/ is any type `T` defined s.t.
+1. <<def:1.1>> An object of type T is comparable to `nullptr`.
+2. <<def:1.2>> An object of type T is contextually convertible to `bool`; the effect of the conversion is false when under [[def:1.1]] the object is equivalent to `nullptr` and true otherwise.
+   3. <<def:1-2-3>> given a value of type T, m a member of type U, mp is a pointer to member of type U, any of the following is defined:
+      - *v
+      - v->m
+      - v->*m
+
+*** Notes
+Any raw pointer `T*` is a /NullablePointer/.
+Smart pointers are also /NullablePointers/.
+This is a weaker version of /NullablePointer/ named requirement of standard C++.
+
+We refer to types satisfying /NullablePointer/ as nullable pointers.
+
+
+** <<def:2>> null-safe pointer
+
+A pointer is *null-safe* if it not equivalent to `nullptr`, or equivalence with `nullptr` is not defined (e.g. `gsl::not_null<T>`), and the behavior of `*`, `->` and `->*` operators is defined.
+* Rules
+
+** <<rule:1>> not_null<T>
+For all types T s.t. T is a NullablePointer, gsl::not_null<T> is never equivalent nullptr and is always safe to dereference.
+
+The operators *, -> and ->* will never dereference nullptr.
+It is referred to as a non-nullable pointer type.
+
+** <<rule:2>> nullable pointers are unsafe by default
+
+A value of nullable pointer type cannot be dereferenced unless it is null-safe.
+
+** <<rule:3>> nullable pointer safety conditions
+
+A /NullablePointer/ value is null-safe iff either
+1. <<rule:3.1>> It is a known null-safe value (a value known to never be `nullptr`) (see ...).
+2. <<rule:3.2>> A valid /null-safety proof/ has been established for the value (see ...).
+
+*** Notes
+
+As consequence of [[rule:3.2]] and [[rule:5]] null-safety of a /NullablePointer/ value is ephemeral.
+
+** <<rule:4>> non-nullable pointer construction
+A non-nullable pointer cannot be constructed or assigned a value from a nullable pointer unless that nullable pointer is null-safe.
+
+** <<rule:5>> null-safe prvalues
+The following prvalues are always null-safe:
+1. <<rule:5.1>> the `this` pointer
+2. <<rule:5.2>> the result of the built-in address-of operator `&a`
+3. <<rule:5.3>> the result of the built-in throwable `new`
+4. <<rule:5.4>> the result of array-to-pointer or function-to-pointer conversion
+5. <<rule:5.5>> the result of the `gsl::not_null<T>::operator T*` conversion
+
+*** Notes
+By [[rule:5.5]] implicit conversion from a non-nullable to a nullable pointer always yields a null-safe nullable pointer.
+
+By [[rule:5]] and [[rule:4]] a non-nullable pointer can always be constructed from a null-safe prvalue.
+
+** nullable pointer arithmetic
+Arithmetic on a nullable pointer value `v` resulting in a pointer value is null-safe iff `v` is null-safe.
+
+*** Notes
+Pointer subtractions resulting in `std::ptrdiff_t` values are not covered by this rules, as these are not pointer values.
+
+Arithmetic on `v` is null-safe if there is a valid null-safety proof for `v` ([[rule:3.2]]) or `v` is always known to be null-safe ([[rule:3.1]]), such as if `v` is the result of array-to-pointer decay ([[rule:5.4]]).
+
+FIXME! This is now wrong: Even though a resulting pointer value `u` of the arithmetic maybe null-safe, if `u` is used to modify a pointer `q` within a loop and `q` is used in the loop condition, then `q` will not be null-safe at the start of the loop including the loop condition. See ...
+
+This rule on its own is not enough to guarantee null-safety of pointer arithmetic (e.g. due to overflows). The arithmetic itself must also have defined behaviour. The standard defines pointer arithmetic to result to `nullptr` (when both operands are equivalent to nullptr) or to a pointer to an array element. This rule only guarantees that arithmetic with defined behaviour that results in `nullptr` will not be considered null-safe. The rule does not guarantee that pointer arithmetic has defined behaviour. Pointer arithmetic with undefined behaviour may very well result in a `nullptr` dereference.
+
+This rule always considers pointer arithmetic from `nullptr` to be unsafe even though, for example, `nullptr + 1` may not yield `nullptr` in popular compilers. This, however, is still an expression with undefined behaviour according to the standard.
+
+Arithmetic on non-nullable pointers is not allowed.
+** <<rule:6>> rvalues
+*** null-safe provable if idempotent
+A null-safety proof can be established via [[rule:8]] for a nullable pointer rvalue `v` iff the expression producing the rvalue is idempotent.
+
+**** Notes
+An idempotent expression is defined as an expression which for every free variable of said expression, for every value of said free variable results in equal rvalues when evaluated multiple times within same context.
+
+// FIXME define more formally
+
+This effectively makes rvalues obtained via function calls always unsafe unless the call is itself a constant expression.
+
+*** unsafe otherwise
+
+All other rvalues are never null-safe.
+
+**** Notes
+Since rvalue references behave as lvalues within expressions, the null-safety of rvalue references is governed by the rules applying to lvalues, unless a specific rule for rvalue references is applicable.
+
+** <<rule:7>> unsafe volatile references
+An lvalue reference to a *non-local* or *escaped* volatile nullable pointer is never null-safe.
+
+*** Notes
+Null-safety proofs can only be established for references to a volatile nullable pointer when the pointer is local and it has not escaped the local scope; the pointer's existence has not been communicated elsewhere.
+
+Volatile non-nullable pointers can be constructed only through conversion from a non-volatile pointer, or as a copy of another volatile non-nullable pointer.
+
+This rule applies only to lvalue references. Even if an rvalue is volatile, by its very nature, it is unknowable to other parties for mutation. Therefore, null-safety proofs for volatile nullable pointer rvalue references can be established via the rules applying to lvalues.
+
+** <<rule:8>> null-safety proofs
+Given a nullable pointer `v` a null-safety proof for `v` is established by one of:
+
+*** <<rule:8.1>> initialization
+If `v` is a (possibly static) local variable initialized from a null-safe value.
+
+The scope of the null-safety proof begins immediately after the initializing expression and cannot not exceed the scope of the local variable `v`.
+
+**** Notes
+Due to non-nullable to nullable conversion this includes initializing a nullable pointer from a non-nullable (see [[rule:5.5]]).
+
+`v` can be a reference.
+
+Initialization of global variables or member fields does not establish null-safety proofs. Note this applies to the initialization statement itself; the initializer expression of a global variable or member field can itself establish null-safety proofs within the scope of the expression (e.g. via the `,` operator or a conditional expression).
+
+*** <<rule:8.2>> assignment
+Assigning to `v` a null-safe value.
+
+The scope of the null-safety proof begins immediately after the assignment expression. If `v` is a local variable then the null-safety proof cannot exceed the scope of the variable. Otherwise, if assignment occurs within a function or lambda scope, the null-safety proof does not exceed the scope of said function or lambda. If assignment occurs within a global variable or default member field initializer expression, then the scope of the null-safety proof does not exceed the scope of the initializer expression.
+
+**** Notes
+Due to non-nullable to nullable conversion this includes initializing a nullable pointer from a non-nullable (see [[rule:5.5]]).
+
+
+*** <<rule:8.3>> logical operators
+when `v` is one of:
+a. lvalue
+b. lvalue reference non-volatile
+c. lvalue reference to a local, non-escaped volatile pointer (see ...)
+d. rvalue reference
+
+within a boolean expression:
+1. `e1 && e2` where `e1` is `true` when `v != nullptr` a null-safety proof for `v` is established in `e2`
+2. `e1 || e2` where `e1` is `false` when `v != nullptr` a null-safety proof `v` is established in `e2`
+
+The scope of the null-safety proof does not exceed the scope of the boolean expression.
+
+*** <<rule:8.4>> branching
+when `v` is one of:
+a. lvalue
+b. lvalue reference non-volatile
+c. lvalue reference to a local, non-escaped volatile pointer (see ...)
+d. rvalue reference
+
+branching in the form of:
+1. <<rule:8.4.1>> an assertion `assert(condition)` where `condition` is `true` when `v != nullptr`.
+
+   The scope of the null-safety proof begins immediately after the assertion.
+
+2. <<rule:8.4.2>> a conditional expression `c ? a : b` where the result of `c` depends on `v == nullptr`
+   1. when `c` is `true` when `v != nullptr` a null-safety proof for `v` is established in `a`.
+   2. when `c` is `false` when `v != nullptr` a null-safety proof for `v` is established in `b`.
+   The scope of the null-safety proof does not exceed the scope of the sub-expression in which it is established.
+
+3. <<rule:8.4.3>> an if statement `if (c) s` when `c` is `true` when `v != nullptr` a null-safety proof for `v` is established in `s`
+
+4. <<rule:8.4.4>> an if statement `if (c) s1 else s2` when `c` is `false` when `v == nullptr` a null-safety proof for `v` is established in `s2`
+
+5. <<rule:8.4.5>> a switch statement `switch (c) { ... }` where `c` is true when `v != nullptr` a null-safety proof for `v` is established within the case sub-statement matching `c` and any fall-trough case sub-statements, or the default sub-statement if no case is matching.
+
+6. <<rule:8.4.6>> a while statement `while (c) { s }` where `c` depends on `v == nullptr`
+   1. when `c` is `true` when `v != nullptr` a null-safety proof for `v` is established in `s`.
+
+      The scope of the null-safety proof does not exceed `s`.
+   2. when `c` is `false` when `v == nullptr` and for all branches in `s` terminating with `break` a null-safety proof for `v` is established, then a null-safety proof for `v` is established immediately after the `while`.
+
+      When `s` has no `break` sub-statements then the null-safety proof is also established after the `while` (vacuous truth).
+
+7. <<rule:8.4.7>> a do-while statement `do { s } while(c)` when `c` is `false` when `v == nullptr` and for all branches in `s` terminating with `break` a null safety proof for `v` is established, then a null-safety proof for `v` is established immediately after the do-while.
+
+   When `s` has no `break` sub-statements then the null-safety proof is also established after the `do-while` (vacuous truth).
+
+8. <<rule:8.4.8>> a for statement `for (a; c; b) s` where `c` depends on `v == nullptr`
+   1. when `c` is `true` when `v != nullptr` a null-safety proof for `v` is established in the statement sequence `s;b`.
+
+      The scope of the null-safety proof does not exceed `s` and `b`.
+   2. when `c` is `false` when `v == nullptr` and for all branches in `s` terminating with `break` a null-safety proof for `v` is established, then a null-safety proof for `v` is established immediately after the `for`.
+
+** <<rule:9>> null-safety proof aliasing
+Establishing a null-safety proof on a nullable pointer `v` also establishes a null-safety proof for every local variable aliasing `v` (every local variable guaranteed to have the same value).
+
+Invalidation of a null-safety proof for a nullable pointer `v` does not invalidate null-safety proofs of non-reference aliases.
+
+** <<rule:10>> null-safety scope start
+The scope of a null-safety proof begins from the point it is established.
+
+*** Notes
+Assignment from a null-safe value does not establish a null-safety proof for prior program points.
+
+Null-safety proofs resulting from aliasing start from the same point.
+
+Null-safety proofs do not travel to the past.
+
+** <<rule:11>> null-safety scope end
+A null-safety proof ceases to be valid when it either:
+a. reaches the end of its scope
+b. is invalidated (see [[rule:12]])
+
+The scope of any null-safety proof does not exceed the scope of:
+a. global variable initializer expression in which it is established
+b. default member field initializer expression in which it is established
+c. function or lambda expression in which it is established
+
+*** Notes
+Null-safety proofs established within a function are not returned to a caller via return nor via throw.
+Null-safety proofs established for a function call parameter are not passed into the callee.
+Null-safety proofs are not propagated by lambda captures.
+Class-scope null-safety proofs do not exist.
+
+** <<rule:12>> null-safety proof invalidation
+A null-safety proof is not permanent and can be invalidated by subsequent statements; a nullable pointer that has its null-safety proof invalidated is no longer null-safe.
+
+A null-safety proof is invalidated by:
+*** <<rule:12.1>> assignment of unsafe nullable pointer
+Assignment of an unsafe nullable pointer to a nullable pointer invalidates any null-safety proofs for the pointer.
+
+*** <<rule:12.2>> NullablePointer mutation
+Given a nullable pointer `v` of class type (not a raw pointer) any mutation of `v` invalidates any null-safety proof for `v`.
+
+**** Notes
+For example, calling `reset` on a null-safe `std::unique_ptr` will invalidate null-safety.
+
+*** <<rule:12.3>> non-local lvalue invalidation
+A null-safety proof established on a non-local, non-const nullable pointer lvalue, or rvalue reference, is invalidated by any call expression.
+
+**** Notes
+Non-local refers to object members and global variables. It does not apply to lambda captures for which (see ...).
+
+*** <<rule:12.4>> non-local lvalue reference invalidation
+A null-safety proof established on nullable pointer lvalue reference `v`, regardless of const qualification, that:
+a. is not bound to an rvalue
+b. is bound to value that is not local to the function, lambda, or initializer expression in which the null-safety proof is established
+c. is a parameter to the function in which the null-safety proof is established
+
+is invalidated by any call expression.
+
+*** <<rule:12.5>> lambda capture lvalue reference invalidation
+A null-safety proof established on an lvalue reference lambda capture, regardless of const qualification, is invalidated upon any call expression within the lambda body.
+
+**** Notes
+This rule does not apply on lvalue lambda captures, but rules for pointer escapes still apply.
+
+*** <<rule:12.6>> non-volatile pointer escapes
+Any call expression within a function/lambda body or global variable/member initializer expression invalidates the null-safety proof for all nullable pointers that have escaped, as non-volatile, the scope of the function/lambda body or global variable/member field initializer expression.
+
+A nullable pointer `v` escapes the scope by:
+1. assigning the address of `v` to a non-local (possibly nullable) pointer to a non-const and non-volatile nullable pointer.
+2. <<rule:12.6.2>> passing the address of `v` as a call expression parameter of (possibly nullable) pointer to non-const and non-volatile nullable pointer type.
+3. <<rule:12.6.3>> passing `v` as a call expression parameter of non-const,non-volatile lvalue reference to a nullable pointer.
+4. using the address of `v` in direct- or copy-list-initialization of objects of class type or aggregate initialization, to initialize a (possibly nullable) pointer to a non-const non-volatile nullable pointer.
+5. using `v` in direct- or copy-list-initialization of objects of class type or aggregate initialization, to bind a reference to a non-const, non-volatile nullable pointer.
+
+**** Notes
+Passing the pointer as a non-volatile const lvalue reference parameter does not constitute a pointer escape.
+
+A pointer escape can happen at any point, prior or after the establishment of a null-safety proof.
+
+"Address of the pointer" includes the address directly as well as any pointer whose value is the address of said pointer.
+
+In [[rule:12.6.2]] and [[rule:12.6.3]] the call responsible for the pointer escape is also the same call expression that invalidates a null-safety proof if one exists.
+
+*** <<rule::12.7>> volatile pointer escapes
+FIXME! Volatile pointer escapes are not allowed.
+A nullable pointer `v` escape via pointer or reference to a non-const volatile nullable pointer invalidates any null-safety proof for `v` and renders subsequent null-safety proofs impossible.
+
+A nullable pointer `v` escapes the scope as volatile by:
+1. assigning the address of `v` to a non-local (possibly nullable) pointer to a non-const volatile nullable pointer.
+2. passing the address of `v` as a call expression parameter of (possibly nullable) pointer to non-const volatile nullable pointer type.
+3. passing `v` as a call expression parameter of non-const volatile lvalue reference to a nullable pointer.
+4. using the address of the pointer in direct- or copy-list-initialization of objects of class type or aggregate initialization to initialize a (possibly nullable) pointer to a non-const volatile nullable pointer.
+5. using `v` in direct- or copy-list-initialization of objects of class type or aggregate initialization, to bind a reference to a non-const volatile nullable pointer.
+
+*** Notes
+Call expressions include invoking functions, methods, constructors, lambda expressions, objects with overloaded call operators, destructors.
+** <<rule:13>> loops
+Given a nullable pointer `v` and a loop of either:
+a. `while(c) s`
+b. `do s while (c)`
+c. `for (a; c; b) s`
+d. TODO range-for
+
+*** <<def:3>> null-safety variance of nullable pointers
+**** loop-modified nullable pointers
+A nullable pointer lvalue `p` is loop-modified in the /loop-statement-sequence/:
+- c;s (while)
+- s;c (do-while)
+- a;c;s;b (for)
+- TODO range-for
+when any sub-statement of the loop-statement-sequence:
+- modifies `p` via assignment and compound assignment operators (=, +=, -=, ...)
+- modifies `p` via pre/post unary increment/decrement operators
+- escapes `p` via a call expression as in [[rule:12.6][rule:12.6]]
+**** null-safety variance
+A loop-modified nullable pointer is /null-safe invariant/ when at the end of every branch of the loop-statement-sequence the pointer has the same null-safety (or absence of) as before the loop-statement-sequence; i.e. if the pointer was null-safe before it is still null-safe after, or if not was not null-safe before it is not null-safe after.
+
+In all other cases the loop-modified nullable pointer is /null-safe variant/.
+
+*** <<rule:13.1>> null-safe variant invalidation
+All loop-modified null-safe variant nullable pointers have any null-safety proofs that hold prior to the loop-statement-sequence invalidated at the start of the loop-statement-sequence.
+
+Null-safe invariant pointers maintain any prior null-safety proof at the start of the loop-statement-sequence.
+
+*** <<rule.13.2>> null-safety invalidation
+If at the end of any branch of the loop-statement-sequence a nullable pointer is not null-safe then it is not null-safe after the loop.
+
+Any null-safety invalidation within the loop survives beyond the loop.
+As consequence of [[rule:13.1]] the nullable pointer is not null-safe at the start of the loop-statement-sequence (the start of the loop) either.
+*** <<rule:13.3>> null-safety proofs and iteration
+Null-safety proofs established within the loop-statement-sequence are maintained across all iterations iff all of the following:
+- the nullable pointer is null-safe prior the loop-statement-sequence
+- the nullable pointer is null-safe invariant
+- at the end of every branch of the loop-statement-sequence the nullable-pointer is null-safe
+
+Otherwise, null-safety proofs do not survive across iterations.
+*** <<rule:13.4>> null-safety proofs created by the loop body
+Null-safety proofs established within the loop-statement-sequence apply after the loop iff:
+- at the end of every branch of the loop-statement-sequence the nullable-pointer is null-safe
+
+* TODO Conditional proofs
+If a proof is made under a condition, and the condition remains unchanged, then under that same condition the pointer is null-safe

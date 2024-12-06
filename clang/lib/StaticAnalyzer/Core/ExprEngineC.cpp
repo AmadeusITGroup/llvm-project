@@ -20,6 +20,14 @@ using namespace clang;
 using namespace ento;
 using llvm::APSInt;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 /// Optionally conjure and return a symbol for offset when processing
 /// an expression \p Expression.
 /// If \p Other is a location, conjure a symbol for \p Symbol
@@ -56,7 +64,13 @@ void ExprEngine::VisitBinaryOperator(const BinaryOperator* B,
     ProgramStateRef state = (*it)->getState();
     const LocationContext *LCtx = (*it)->getLocationContext();
     SVal LeftV = state->getSVal(LHS, LCtx);
+    DUMP(llvm::outs() << "EXPR ENGINE :: VisitBinaryOperator :: left sval: ");
+    DUMP(LeftV.dump());
+    DUMP(llvm::outs() << "\n");
     SVal RightV = state->getSVal(RHS, LCtx);
+    DUMP(llvm::outs() << "EXPR ENGINE :: VisitBinaryOperator :: right sval: ");
+    DUMP(RightV.dump());
+    DUMP(llvm::outs() << "\n");
 
     BinaryOperator::Opcode Op = B->getOpcode();
 
@@ -68,6 +82,7 @@ void ExprEngine::VisitBinaryOperator(const BinaryOperator* B,
         RightV = svalBuilder.conjureSymbolVal(nullptr, B->getRHS(), LCtx,
                                               Count);
       }
+      DUMP(llvm::outs() << "EXPR ENGINE :: VisitBinaryOperator :: is op expr glvalue: " << B->isGLValue() << "\n");
       // Simulate the effects of a "store":  bind the value of the RHS
       // to the L-Value represented by the LHS.
       SVal ExprVal = B->isGLValue() ? LeftV : RightV;
@@ -93,7 +108,21 @@ void ExprEngine::VisitBinaryOperator(const BinaryOperator* B,
       // sure that the members of temporaries have a valid 'this' pointer for
       // other checks.
       if (B->getOpcode() == BO_PtrMemD)
+      {
         state = createTemporaryRegionIfNeeded(state, LCtx, LHS);
+
+        // SVal Result = svalBuilder.conjureSymbolVal(nullptr, LCtx, B->getType(), currBldrCtx->blockCount());
+        // if (!Result.isUnknown()) {
+        //   state = state->BindExpr(B, LCtx, Result);
+        // } else {
+        //   // If we cannot evaluate the operation escape the operands.
+        //   state = escapeValues(state, LeftV, PSK_EscapeOther);
+        //   state = escapeValues(state, RightV, PSK_EscapeOther);
+        // }
+
+        // Bldr.generateNode(B, *it, state);
+        // continue;
+      }
 
       // Process non-assignments except commas or short-circuited
       // logical expressions (LAnd and LOr).
@@ -361,12 +390,12 @@ void ExprEngine::VisitCast(const CastExpr *CastE, const Expr *Ex,
       case CK_BooleanToSignedIntegral:
       case CK_IntegralToPointer:
       case CK_PointerToIntegral: {
-        SVal V = state->getSVal(Ex, LCtx);
-        if (isa<nonloc::PointerToMember>(V)) {
-          state = state->BindExpr(CastE, LCtx, UnknownVal());
-          Bldr.generateNode(CastE, Pred, state);
-          continue;
-        }
+        // SVal V = state->getSVal(Ex, LCtx);
+        // if (isa<nonloc::PointerToMember>(V)) {
+        //   state = state->BindExpr(CastE, LCtx, UnknownVal());
+        //   Bldr.generateNode(CastE, Pred, state);
+        //   continue;
+        // }
         // Explicitly proceed with default handler for this case cascade.
         state =
             handleLValueBitCast(state, Ex, LCtx, T, ExTy, CastE, Bldr, Pred);
@@ -489,18 +518,19 @@ void ExprEngine::VisitCast(const CastExpr *CastE, const Expr *Ex,
         Bldr.generateNode(CastE, Pred, state);
         continue;
       }
+      case CK_NullToMemberPointer:
       case CK_NullToPointer: {
         SVal V = svalBuilder.makeNullWithType(CastE->getType());
         state = state->BindExpr(CastE, LCtx, V);
         Bldr.generateNode(CastE, Pred, state);
         continue;
       }
-      case CK_NullToMemberPointer: {
-        SVal V = svalBuilder.getMemberPointer(nullptr);
-        state = state->BindExpr(CastE, LCtx, V);
-        Bldr.generateNode(CastE, Pred, state);
-        continue;
-      }
+      // case CK_NullToMemberPointer: {
+      //   SVal V = svalBuilder.getMemberPointer(nullptr);
+      //   state = state->BindExpr(CastE, LCtx, V);
+      //   Bldr.generateNode(CastE, Pred, state);
+      //   continue;
+      // }
       case CK_DerivedToBaseMemberPointer:
       case CK_BaseToDerivedMemberPointer:
       case CK_ReinterpretMemberPointer: {
@@ -1005,6 +1035,9 @@ void ExprEngine::VisitUnaryOperator(const UnaryOperator* U, ExplodedNode *Pred,
 
       // Get the value of the subexpression.
       SVal V = state->getSVal(Ex, LCtx);
+      DUMP(llvm::outs() << "EXPR ENGINE :: VisitUnaryOperator : subexpr V :: ");
+      DUMP(V.dump());
+      DUMP(llvm::outs() << "\n");
 
       if (V.isUnknownOrUndef()) {
         Bldr.generateNode(U, N, state->BindExpr(U, LCtx, V));

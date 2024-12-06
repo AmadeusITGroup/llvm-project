@@ -1813,6 +1813,10 @@ defm cxx_exceptions: BoolFOption<"cxx-exceptions",
   LangOpts<"CXXExceptions">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option], "Enable C++ exceptions">,
   NegFlag<SetFalse>>;
+defm nullable_pointers : BoolFOption<"nullable-pointers",
+  LangOpts<"NullablePointers">, DefaultFalse,
+  PosFlag<SetTrue, [], [ClangOption, CC1Option], "Enable C++ nullable pointers">,
+  NegFlag<SetFalse>>;
 defm async_exceptions: BoolFOption<"async-exceptions",
   LangOpts<"EHAsynch">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option],

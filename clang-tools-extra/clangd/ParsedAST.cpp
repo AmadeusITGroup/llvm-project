@@ -57,6 +57,7 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/Core/Diagnostic.h"
 #include "clang/Tooling/Syntax/Tokens.h"
+#include "clang/StaticAnalyzer/Frontend/AnalysisConsumer.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -93,8 +94,8 @@ template <class T> std::size_t getUsedBytes(const std::vector<T> &Vec) {
 
 class DeclTrackingASTConsumer : public ASTConsumer {
 public:
-  DeclTrackingASTConsumer(std::vector<Decl *> &TopLevelDecls)
-      : TopLevelDecls(TopLevelDecls) {}
+  DeclTrackingASTConsumer(std::vector<Decl *> &TopLevelDecls, std::unique_ptr<ASTConsumer> AnalysisConsumer)
+      : TopLevelDecls(TopLevelDecls), AnalysisConsumer(std::move(AnalysisConsumer)) {}
 
   bool HandleTopLevelDecl(DeclGroupRef DG) override {
     for (Decl *D : DG) {
@@ -111,11 +112,29 @@ public:
 
       TopLevelDecls.push_back(D);
     }
+    if (AnalysisConsumer)
+      return AnalysisConsumer->HandleTopLevelDecl(DG);
     return true;
+  }
+
+  void Initialize(ASTContext &Context) override {
+    if (AnalysisConsumer)
+      AnalysisConsumer->Initialize(Context);
+  }
+
+  void HandleTopLevelDeclInObjCContainer(DeclGroupRef DG) override {
+    if (AnalysisConsumer)
+      AnalysisConsumer->HandleTopLevelDeclInObjCContainer(DG);
+  }
+
+  void HandleTranslationUnit(ASTContext &C) override {
+    if (AnalysisConsumer)
+      AnalysisConsumer->HandleTranslationUnit(C);
   }
 
 private:
   std::vector<Decl *> &TopLevelDecls;
+  std::unique_ptr<ASTConsumer> AnalysisConsumer;
 };
 
 class ClangdFrontendAction : public SyntaxOnlyAction {
@@ -125,7 +144,7 @@ public:
 protected:
   std::unique_ptr<ASTConsumer>
   CreateASTConsumer(CompilerInstance &CI, llvm::StringRef InFile) override {
-    return std::make_unique<DeclTrackingASTConsumer>(/*ref*/ TopLevelDecls);
+    return std::make_unique<DeclTrackingASTConsumer>(/*ref*/ TopLevelDecls, CI.getLangOpts().NullablePointers ? ento::CreateAnalysisConsumer(CI) : nullptr);
   }
 
 private:
@@ -441,6 +460,15 @@ ParsedAST::build(llvm::StringRef Filename, const ParseInputs &Inputs,
          !Diags.empty() ? static_cast<DiagBase &>(Diags.back()).Message
                         : "unknown error");
     return std::nullopt;
+  }
+  if (Clang->getLangOpts().NullablePointers) {
+    auto AnalyzerOpts = Clang->getAnalyzerOpts();
+    AnalyzerOpts->ExplorationStrategy = "unexplored_first_queue";
+    AnalyzerOpts->IPAMode = "inlining";
+    AnalyzerOpts->AnalyzerWerror = true;
+    AnalyzerOpts->AnalysisDiagOpt = PD_TEXT;
+    AnalyzerOpts->CheckersAndPackages.clear();
+    AnalyzerOpts->CheckersAndPackages.emplace_back("amadeus.NullablePointers", true);
   }
   tidy::ClangTidyOptions ClangTidyOpts;
   {

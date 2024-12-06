@@ -168,6 +168,7 @@ clang_target_link_libraries(clangDaemon
   clangLex
   clangSema
   clangSerialization
+  clangStaticAnalyzerFrontend
   clangTooling
   clangToolingCore
   clangToolingInclusions

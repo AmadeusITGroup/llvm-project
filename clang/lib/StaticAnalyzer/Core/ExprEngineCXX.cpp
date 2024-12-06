@@ -27,6 +27,14 @@
 using namespace clang;
 using namespace ento;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 void ExprEngine::CreateCXXTemporaryObject(const MaterializeTemporaryExpr *ME,
                                           ExplodedNode *Pred,
                                           ExplodedNodeSet &Dst) {
@@ -973,11 +981,17 @@ void ExprEngine::VisitCXXNewAllocatorCall(const CXXNewExpr *CNE,
     // where new can return NULL. If we end up supporting that option, we can
     // consider adding a check for it here.
     // C++11 [basic.stc.dynamic.allocation]p3.
+    // NOTE: This is only true for stdlib implementations; overloads need not
+    // follow that convention
     if (const FunctionDecl *FD = CNE->getOperatorNew()) {
       QualType Ty = FD->getType();
-      if (const auto *ProtoType = Ty->getAs<FunctionProtoType>())
-        if (!ProtoType->isNothrow())
+      if (const auto *ProtoType = Ty->getAs<FunctionProtoType>()) {
+        auto &SourceManager = getSValBuilder().getContext().getSourceManager();
+        auto ExpansionLoc = SourceManager.getExpansionLoc(FD->getBeginLoc());
+        auto IsStdlibNew = ExpansionLoc.isValid() && SourceManager.isInSystemHeader(ExpansionLoc);
+        if (!ProtoType->isNothrow() && IsStdlibNew)
           State = State->assume(RetVal.castAs<DefinedOrUnknownSVal>(), true);
+      }
     }
 
     ValueBldr.generateNode(
@@ -1148,6 +1162,7 @@ void ExprEngine::VisitCXXDeleteExpr(const CXXDeleteExpr *CDE,
 
 void ExprEngine::VisitCXXCatchStmt(const CXXCatchStmt *CS, ExplodedNode *Pred,
                                    ExplodedNodeSet &Dst) {
+  DUMP(llvm::outs() << "INTERNAL: ExprEngine::VisitCXXCatchStmt\n");
   const VarDecl *VD = CS->getExceptionDecl();
   if (!VD) {
     Dst.Add(Pred);

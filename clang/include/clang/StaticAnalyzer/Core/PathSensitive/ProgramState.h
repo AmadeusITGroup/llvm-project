@@ -281,6 +281,8 @@ public:
                                          const LocationContext *LCtx, SVal V,
                                          bool Invalidate = true) const;
 
+  [[nodiscard]] ProgramStateRef UnbindExpr(const Stmt *S, const LocationContext *LCtx) const;
+
   [[nodiscard]] ProgramStateRef bindLoc(Loc location, SVal V,
                                         const LocationContext *LCtx,
                                         bool notifyChanges = true) const;

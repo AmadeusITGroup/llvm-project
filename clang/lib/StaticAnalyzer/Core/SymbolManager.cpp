@@ -469,7 +469,7 @@ bool SymbolReaper::isLive(SymbolRef sym) {
     KnownLive = isReadableRegion(cast<SymbolRegionValue>(sym)->getRegion());
     break;
   case SymExpr::SymbolConjuredKind:
-    KnownLive = false;
+    KnownLive = cast<SymbolConjured>(sym)->getCount() == std::numeric_limits<unsigned int>::max();
     break;
   case SymExpr::SymbolDerivedKind:
     KnownLive = isLive(cast<SymbolDerived>(sym)->getParentSymbol());

@@ -784,7 +784,8 @@ class SymbolicRegion : public SubRegion {
     assert(s && isa<SymbolData>(s));
     assert(s->getType()->isAnyPointerType() ||
            s->getType()->isReferenceType() ||
-           s->getType()->isBlockPointerType());
+           s->getType()->isBlockPointerType() ||
+           s->getType()->isMemberPointerType());
     assert(isa<UnknownSpaceRegion>(sreg) || isa<HeapSpaceRegion>(sreg) ||
            isa<GlobalSystemSpaceRegion>(sreg));
   }

@@ -375,12 +375,36 @@ void AnalysisConsumer::HandleTopLevelDeclInObjCContainer(DeclGroupRef DG) {
 }
 
 void AnalysisConsumer::storeTopLevelDecls(DeclGroupRef DG) {
+  auto &C = Mgr->getASTContext();
+  auto *DC = C.getTranslationUnitDecl();
+  auto StartLoc = SourceLocation {};
+  auto NLoc = SourceLocation {};
+
   for (auto &I : DG) {
 
     // Skip ObjCMethodDecl, wait for the objc container to avoid
     // analyzing twice.
     if (isa<ObjCMethodDecl>(I))
       continue;
+
+    if (auto *V = dyn_cast<VarDecl>(I)) {
+      auto FuncName = std::string {"__wrapper_for_"} + V->getNameAsString();
+      auto N = DeclarationName { &C.Idents.get(FuncName) };
+      auto T = C.getFunctionType(C.VoidTy, {}, FunctionProtoType::ExtProtoInfo{});
+      auto *TInfo = C.CreateTypeSourceInfo(T);
+      auto SC = StorageClass::SC_None;
+      auto *F = FunctionDecl::Create(C, DC, StartLoc, NLoc, N, T, TInfo, SC);
+
+      void *Mem = C.Allocate<DeclStmt>();
+      auto VStmt = new (Mem) DeclStmt(DG, {}, {});
+      auto Stmts = ArrayRef<Stmt*>(VStmt);
+      auto *Body = CompoundStmt::Create(C, Stmts, {}, V->getBeginLoc(), {});
+
+      F->setBody(Body);
+
+      LocalTUDecls.push_back(F);
+      continue;
+    }
 
     LocalTUDecls.push_back(I);
   }

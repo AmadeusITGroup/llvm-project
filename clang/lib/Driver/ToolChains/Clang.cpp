@@ -6886,6 +6886,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
+  Args.addOptInFlag(CmdArgs, options::OPT_fnullable_pointers,
+                    options::OPT_fno_nullable_pointers);
+
   // C++ "sane" operator new.
   Args.addOptOutFlag(CmdArgs, options::OPT_fassume_sane_operator_new,
                      options::OPT_fno_assume_sane_operator_new);

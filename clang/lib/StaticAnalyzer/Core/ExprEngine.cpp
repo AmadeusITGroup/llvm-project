@@ -87,6 +87,14 @@
 using namespace clang;
 using namespace ento;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 #define DEBUG_TYPE "ExprEngine"
 
 STATISTIC(NumRemoveDeadBindings,
@@ -1712,7 +1720,6 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
   switch (S->getStmtClass()) {
     // C++, OpenMP and ARC stuff we don't support yet.
     case Stmt::CXXDependentScopeMemberExprClass:
-    case Stmt::CXXTryStmtClass:
     case Stmt::CXXTypeidExprClass:
     case Stmt::CXXUuidofExprClass:
     case Stmt::CXXFoldExprClass:
@@ -1917,6 +1924,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
 
     // Cases we intentionally don't evaluate, since they don't need
     // to be explicitly evaluated.
+    case Stmt::CXXTryStmtClass:
     case Stmt::PredefinedExprClass:
     case Stmt::AddrLabelExprClass:
     case Stmt::AttributedStmtClass:
@@ -2309,11 +2317,15 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
       break;
 
     case Stmt::ObjCAtThrowStmtClass:
-    case Stmt::CXXThrowExprClass:
-      // FIXME: This is not complete.  We basically treat @throw as
-      // an abort.
-      Bldr.generateSink(S, Pred, Pred->getState());
+    case Stmt::CXXThrowExprClass: {
+      DUMP(llvm::outs() << "INTERNAL: ExprEngine::Visit CXXThrowExpr\n");
+      Bldr.takeNodes(Pred);
+      ExplodedNodeSet preVisit;
+      getCheckerManager().runCheckersForPreStmt(preVisit, Pred, S, *this);
+      getCheckerManager().runCheckersForPostStmt(Dst, preVisit, S, *this);
+      Bldr.addNodes(Dst);
       break;
+    }
 
     case Stmt::ReturnStmtClass:
       Bldr.takeNodes(Pred);
@@ -2481,6 +2493,7 @@ void ExprEngine::processCFGBlockEntrance(const BlockEdge &L,
                                          NodeBuilderWithSinks &nodeBuilder,
                                          ExplodedNode *Pred) {
   PrettyStackTraceLocationContext CrashInfo(Pred->getLocationContext());
+
   // If we reach a loop which has a known bound (and meets
   // other constraints) then consider completely unrolling it.
   if(AMgr.options.ShouldUnrollLoops) {
@@ -2684,6 +2697,11 @@ bool ExprEngine::hasMoreIteration(ProgramStateRef State,
 /// the acquisition of the loop condition value failed.
 static std::optional<std::pair<ProgramStateRef, ProgramStateRef>>
 assumeCondition(const Stmt *Condition, ExplodedNode *N) {
+  DUMP(llvm::outs() << "EXPR ENGINE :: assuming condition\n");
+  DUMP(llvm::outs() << "EXPR ENGINE :: Condition:\n");
+  DUMP(Condition->dumpColor());
+  DUMP(llvm::outs() << "\n");
+
   ProgramStateRef State = N->getState();
   if (const auto *ObjCFor = dyn_cast<ObjCForCollectionStmt>(Condition)) {
     bool HasMoreIteraton =
@@ -2699,8 +2717,11 @@ assumeCondition(const Stmt *Condition, ExplodedNode *N) {
       return std::pair<ProgramStateRef, ProgramStateRef>{nullptr, State};
   }
   SVal X = State->getSVal(Condition, N->getLocationContext());
+  DUMP(llvm::outs() << "EXPR ENGINE :: condition sval X\n");
+  DUMP(X.dump());
+  DUMP(llvm::outs() << "\n");
 
-  if (X.isUnknownOrUndef()) {
+  if (X.isPureUnknownOrUndef()) {
     // Give it a chance to recover from unknown.
     if (const auto *Ex = dyn_cast<Expr>(Condition)) {
       if (Ex->getType()->isIntegralOrEnumerationType()) {
@@ -2720,11 +2741,32 @@ assumeCondition(const Stmt *Condition, ExplodedNode *N) {
   }
 
   // If the condition is still unknown, give up.
-  if (X.isUnknownOrUndef())
+  if (X.isPureUnknownOrUndef())
     return std::nullopt;
+
+  // If it's an nullable Unknown then split the state
+  if (X.isUnknownNullable()) {
+    DUMP(llvm::outs() << "EXPR ENGINE :: splitting UknownNullable state\n");
+    DUMP(llvm::outs() << "Condition:\n");
+    DUMP(Condition->dumpColor());
+    DUMP(llvm::outs() << "\n");
+    if (auto *E = dyn_cast<Expr>(Condition)) {
+      Condition = E->IgnoreImpCasts();
+    }
+    auto StTrue = State->BindExpr(Condition, N->getLocationContext(), UnknownNullableSVal::NotNull);
+    auto StFalse = State->BindExpr(Condition, N->getLocationContext(), UnknownNullableSVal::Null);
+
+    auto T = StTrue->getSVal(Condition, N->getLocationContext());
+    DUMP(llvm::outs() << "EXPR ENGINE :: T\n");
+    DUMP(T.dump());
+    DUMP(llvm::outs() << "\n");
+
+    return std::make_pair(StTrue, StFalse);
+  }
 
   DefinedSVal V = X.castAs<DefinedSVal>();
 
+  DUMP(llvm::outs() << "EXPR ENGINE :: splitting Defined state\n");
   ProgramStateRef StTrue, StFalse;
   return State->assume(V);
 }
@@ -2734,7 +2776,9 @@ void ExprEngine::processBranch(const Stmt *Condition,
                                ExplodedNode *Pred,
                                ExplodedNodeSet &Dst,
                                const CFGBlock *DstT,
-                               const CFGBlock *DstF) {
+                               const CFGBlock *DstF,
+                               const Stmt *Loop /* = nullptr */) {
+  DUMP(llvm::outs() << "EXPR ENGINE :: processBranch\n");
   assert((!Condition || !isa<CXXBindTemporaryExpr>(Condition)) &&
          "CXXBindTemporaryExprs are handled by processBindTemporary.");
   const LocationContext *LCtx = Pred->getLocationContext();
@@ -2758,16 +2802,37 @@ void ExprEngine::processBranch(const Stmt *Condition,
                                 "Error evaluating branch");
 
   ExplodedNodeSet CheckersOutSet;
-  getCheckerManager().runCheckersForBranchCondition(Condition, CheckersOutSet,
+  if (Loop)
+    getCheckerManager().runCheckersForLoopCondition(Loop, Condition, CheckersOutSet, Pred, *this);
+  else
+    getCheckerManager().runCheckersForBranchCondition(Condition, CheckersOutSet,
                                                     Pred, *this);
   // We generated only sinks.
   if (CheckersOutSet.empty())
+  {
+    DUMP(llvm::outs() << "EXPR ENGINE :: only sinks from checker\n");
     return;
+  }
+  // if (CheckersOutSet.empty() && !Loop)
+  // {
+  //   llvm::outs() << "EXPR ENGINE :: only sinks from checker\n";
+  //   return;
+  // } else if (CheckersOutSet.empty() && Loop) {
+  //   llvm::outs() << "EXPR ENGINE :: loop only sinks from checker\n";
+  //   BranchNodeBuilder NullCondBldr(Pred, Dst, BldCtx, DstT, DstF);
+  //   NullCondBldr.markInfeasible(true);
+  //   NullCondBldr.generateNode(Pred->getState(), false, Pred);
+  //   return;
+  // }
+
+  DUMP(llvm::outs() << "EXPR ENGINE :: out set size: " << CheckersOutSet.size() << "\n");
 
   BranchNodeBuilder builder(CheckersOutSet, Dst, BldCtx, DstT, DstF);
   for (ExplodedNode *PredN : CheckersOutSet) {
-    if (PredN->isSink())
+    if (PredN->isSink()) {
+      DUMP(llvm::outs() << "EXPR ENGINE :: sink node\n");
       continue;
+    }
 
     ProgramStateRef PrevState = PredN->getState();
 
@@ -2786,20 +2851,132 @@ void ExprEngine::processBranch(const Stmt *Condition,
     // Process the true branch.
     if (builder.isFeasible(true)) {
       if (StTrue)
+      {
+        DUMP(llvm::outs() << "EXPR ENGINE :: generating true branch node\n");
         builder.generateNode(StTrue, true, PredN);
-      else
+      }
+      else if (!Loop)
+      {
+        DUMP(llvm::outs() << "EXPR ENGINE :: true branch is infeasible\n");
         builder.markInfeasible(true);
+      }
     }
 
     // Process the false branch.
     if (builder.isFeasible(false)) {
       if (StFalse)
+      {
+        DUMP(llvm::outs() << "EXPR ENGINE :: generating false branch node\n");
         builder.generateNode(StFalse, false, PredN);
-      else
+      }
+      else if (!Loop)
+      {
+        DUMP(llvm::outs() << "EXPR ENGINE :: false branch is infeasible\n");
         builder.markInfeasible(false);
+      }
     }
   }
   currBldrCtx = nullptr;
+}
+
+void ExprEngine::processJump(const Stmt *Term, NodeBuilderContext &BuilderCtx,
+                             ExplodedNode *Pred, ExplodedNodeSet &DstTop) {
+  DUMP(llvm::outs() << "EXPR ENGINE :: processing jump\n\n");
+  const LocationContext *LCtx = Pred->getLocationContext();
+  PrettyStackTraceLocationContext StackCrashInfo(LCtx);
+  currBldrCtx = &BuilderCtx;
+
+  PrettyStackTraceLoc CrashInfo(getContext().getSourceManager(),
+                                Term->getBeginLoc(),
+                                "Error evaluating jump");
+
+  StmtNodeBuilder Bldr(Pred, DstTop, *currBldrCtx);
+  Bldr.takeNodes(Pred);
+  ExplodedNodeSet Next;
+  getCheckerManager().runCheckersForPreStmt(Next, Pred, Term, *this);
+  ExplodedNodeSet Dst;
+  getCheckerManager().runCheckersForPostStmt(Dst, Next, Term, *this);
+  DUMP(llvm::outs() << "EXPR ENGINE :: jump dst size: " << Dst.size() << "\n");
+  Bldr.addNodes(Dst);
+
+  currBldrCtx = nullptr;
+}
+
+void ExprEngine::processLoopBranch(const Stmt *Condition,
+                                   ExplodedNode *Pred, ExplodedNodeSet &Dst) {
+  DUMP(llvm::outs() << "EXPR ENGINE :: processLoopBranch\n");
+  assert((!Condition || !isa<CXXBindTemporaryExpr>(Condition)) &&
+         "CXXBindTemporaryExprs are handled by processBindTemporary.");
+  const LocationContext *LCtx = Pred->getLocationContext();
+  PrettyStackTraceLocationContext StackCrashInfo(LCtx);
+  // currBldrCtx = &BldCtx;
+
+  // Check for NULL conditions; e.g. "for(;;)"
+  // if (!Condition) {
+  //   BranchNodeBuilder NullCondBldr(Pred, Dst, BldCtx, DstT, DstF);
+  //   NullCondBldr.markInfeasible(false);
+  //   NullCondBldr.generateNode(Pred->getState(), true, Pred);
+  //   return;
+  // }
+
+  if (const auto *Ex = dyn_cast<Expr>(Condition))
+    Condition = Ex->IgnoreParens();
+
+  // Condition = ResolveCondition(Condition, BldCtx.getBlock());
+  PrettyStackTraceLoc CrashInfo(getContext().getSourceManager(),
+                                Condition->getBeginLoc(),
+                                "Error evaluating branch");
+
+  // ExplodedNodeSet CheckersOutSet;
+  // getCheckerManager().runCheckersForLoopCondition(Condition, Dst,
+  //                                                   Pred, *this);
+  // // We generated only sinks.
+  // if (CheckersOutSet.empty())
+  //   return;
+
+  // NodeBuilder builder(Pred, CheckersOutSet, BldCtx);
+  // for (ExplodedNode *PredN : CheckersOutSet) {
+  //   if (PredN->isSink())
+  //     continue;
+
+    // builder.generateNode(PredN->getLocation(), PredN->getState(), PredN);
+    // ProgramStateRef PrevState = PredN->getState();
+
+    // ProgramStateRef StTrue, StFalse;
+    // if (const auto KnownCondValueAssumption = assumeCondition(Condition, PredN))
+    //   std::tie(StTrue, StFalse) = *KnownCondValueAssumption;
+    // else {
+    //   assert(!isa<ObjCForCollectionStmt>(Condition));
+    //   builder.generateNode(PrevState, true, PredN);
+    //   builder.generateNode(PrevState, false, PredN);
+    //   continue;
+    // }
+    // if (StTrue && StFalse)
+    //   assert(!isa<ObjCForCollectionStmt>(Condition));
+
+    // // Process the true branch.
+    // if (builder.isFeasible(true)) {
+    //   if (StTrue) {
+    //     llvm::outs() << "EXPR ENGINE :: generating true branch node\n";
+    //     builder.generateNode(StTrue, true, PredN);
+    //   } else {
+    //     llvm::outs() << "EXPR ENGINE :: true branch is infeasible\n";
+    //     builder.markInfeasible(true);
+    //   }
+    // }
+
+    // // Process the false branch.
+    // if (builder.isFeasible(false)) {
+    //   if (StFalse) {
+    //     llvm::outs() << "EXPR ENGINE :: generating false branch node\n";
+    //     builder.generateNode(StFalse, false, PredN);
+    //   } else {
+    //     llvm::outs() << "EXPR ENGINE :: false branch is infeasible\n";
+    //     builder.markInfeasible(false);
+    //   }
+    // }
+  // }
+  // currBldrCtx = nullptr;
 }
 
 /// The GDM component containing the set of global variables which have been

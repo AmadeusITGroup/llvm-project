@@ -36,6 +36,14 @@
 #include <optional>
 #include <utility>
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 using namespace clang;
 using namespace ento;
 
@@ -235,6 +243,7 @@ bool CoreEngine::ExecuteWorkListWithInitialState(const LocationContext *L,
 }
 
 void CoreEngine::HandleBlockEdge(const BlockEdge &L, ExplodedNode *Pred) {
+  DUMP(llvm::outs() << "CORE ENGINE :: HandleBlockEdge\n");
   const CFGBlock *Blk = L.getDst();
   NodeBuilderContext BuilderCtx(*this, Blk, Pred);
 
@@ -292,6 +301,20 @@ void CoreEngine::HandleBlockEdge(const BlockEdge &L, ExplodedNode *Pred) {
   ExplodedNodeSet dstNodes;
   BlockEntrance BE(Blk, Pred->getLocationContext());
   NodeBuilderWithSinks nodeBuilder(Pred, dstNodes, BuilderCtx, BE);
+
+  // const auto *Term = nodeBuilder.getContext().getBlock()->getTerminatorStmt();
+  // if (Term && isa_and_nonnull<ForStmt, WhileStmt, DoStmt>(Term)) {
+  //   switch (Term->getStmtClass()) {
+  //     default:
+  //       llvm_unreachable("Analysis for this terminator not implemented.");
+  //     case Stmt::WhileStmtClass:
+  //       // HandleLoopBranch(cast<WhileStmt>(Term)->getCond(), Term, nodeBuilder, Pred);
+  //       ExprEng.processLoopBranch(cast<WhileStmt>(Term)->getCond(), Pred, dstNodes);
+  //       // for (ExplodedNode *PredN : dstNodes) {
+  //       //   nodeBuilder.generateNode(PredN->getState(), Pred);
+  //       // }
+  //   }
+  // }
   ExprEng.processCFGBlockEntrance(L, nodeBuilder, Pred);
 
   // Auto-generate a node.
@@ -378,9 +401,13 @@ void CoreEngine::HandleBlockExit(const CFGBlock * B, ExplodedNode *Pred) {
         HandleBranch(cast<ForStmt>(Term)->getCond(), Term, B, Pred);
         return;
 
+      case Stmt::BreakStmtClass:
+        DUMP(llvm::outs() << "\nCoreEngine :: JUMP\n\n");
+        HandleJump(Term, B, Pred);
+        return;
+
       case Stmt::SEHLeaveStmtClass:
       case Stmt::ContinueStmtClass:
-      case Stmt::BreakStmtClass:
       case Stmt::GotoStmtClass:
         break;
 
@@ -438,11 +465,13 @@ void CoreEngine::HandleBlockExit(const CFGBlock * B, ExplodedNode *Pred) {
     return;
   }
 
-  assert(B->succ_size() == 1 &&
-         "Blocks with no terminator should have at most 1 successor.");
+  // NOTE! the following does not hold when EH edges are generated
+  // assert(B->succ_size() == 1 &&
+  //        "Blocks with no terminator should have at most 1 successor.");
 
-  generateNode(BlockEdge(B, *(B->succ_begin()), Pred->getLocationContext()),
-               Pred->State, Pred);
+  for (const auto S : B->succs()) {
+    generateNode(BlockEdge(B, S, Pred->getLocationContext()), Pred->State, Pred);
+  }
 }
 
 void CoreEngine::HandleCallEnter(const CallEnter &CE, ExplodedNode *Pred) {
@@ -455,10 +484,31 @@ void CoreEngine::HandleBranch(const Stmt *Cond, const Stmt *Term,
   assert(B->succ_size() == 2);
   NodeBuilderContext Ctx(*this, B, Pred);
   ExplodedNodeSet Dst;
+  const bool IsLoop = isa<WhileStmt>(Term) || isa<DoStmt>(Term) || isa<ForStmt>(Term);
+  // const bool IsLoop = false;
   ExprEng.processBranch(Cond, Ctx, Pred, Dst, *(B->succ_begin()),
-                       *(B->succ_begin() + 1));
+                       *(B->succ_begin() + 1), IsLoop ? Term : nullptr);
   // Enqueue the new frontier onto the worklist.
   enqueue(Dst);
+}
+
+void CoreEngine::HandleJump(const Stmt *Term, const CFGBlock *B, ExplodedNode *Pred) {
+  assert(B->succ_size() == 1 && "block exited via break must have one successor only");
+  NodeBuilderContext Ctx(*this, B, Pred);
+  ExplodedNodeSet Dst;
+
+  DUMP(llvm::outs() << "CORE ENGINE :: successor block\n");
+  DUMP((*B->succ_begin())->dump());
+  DUMP(llvm::outs() << "\n");
+
+  ExprEng.processJump(Term, Ctx, Pred, Dst);
+
+  DUMP(llvm::outs() << "CORE ENGINE :: jump out set: " << Dst.size() << "\n");
+  // FIXME! We should probably not process these as PostStmts
+  // but more directly like with generateNode here, this just creates an intermediary
+  for (auto *N : Dst) {
+    generateNode(BlockEdge(B, *B->succ_begin(), N->getLocationContext()), N->getState(), N);
+  }
 }
 
 void CoreEngine::HandleCleanupTemporaryBranch(const CXXBindTemporaryExpr *BTE,

@@ -544,10 +544,22 @@ class CFGBuilder {
   using CachedBoolEvalsTy = llvm::DenseMap<Expr *, TryResult>;
   CachedBoolEvalsTy CachedBoolEvals;
 
+  FunctionDecl *LoopGuardFunc;
 public:
   explicit CFGBuilder(ASTContext *astContext,
                       const CFG::BuildOptions &buildOpts)
-      : Context(astContext), cfg(new CFG()), BuildOpts(buildOpts) {}
+      : Context(astContext), cfg(new CFG()), BuildOpts(buildOpts) {
+    auto *DC = Context->getTranslationUnitDecl();
+    auto StartLoc = SourceLocation {};
+    auto NLoc = SourceLocation {};
+
+    auto FuncName = std::string { "__loop__guard__" };
+    auto N = DeclarationName { &Context->Idents.get(FuncName) };
+    auto T = Context->getFunctionType(Context->BoolTy, {}, FunctionProtoType::ExtProtoInfo{});
+    auto *TInfo = Context->CreateTypeSourceInfo(T);
+    auto SC = StorageClass::SC_None;
+    LoopGuardFunc = FunctionDecl::Create(*Context, DC, StartLoc, NLoc, N, T, TInfo, SC);
+  }
 
   // buildCFG - Used by external clients to construct the CFG.
   std::unique_ptr<CFG> buildCFG(const Decl *D, Stmt *Statement);
@@ -2672,11 +2684,15 @@ CFGBlock *CFGBuilder::VisitCallExpr(CallExpr *C, AddStmtChoice asc) {
   bool NoReturn = getFunctionExtInfo(*calleeType).getNoReturn();
 
   bool AddEHEdge = false;
+  bool AddEHEdgeOnTry = false;
 
   // Languages without exceptions are assumed to not throw.
   if (Context->getLangOpts().Exceptions) {
+    assert(!BuildOpts.AddEHEdges || !BuildOpts.AddEHEdgesOnTry && "cannot mix modes for EH edges");
     if (BuildOpts.AddEHEdges)
       AddEHEdge = true;
+    if (BuildOpts.AddEHEdgesOnTry)
+      AddEHEdgeOnTry = true;
   }
 
   // If this is a call to a builtin function, it might not actually evaluate
@@ -2738,6 +2754,11 @@ CFGBlock *CFGBuilder::VisitCallExpr(CallExpr *C, AddStmtChoice asc) {
     else
       addSuccessor(Block, &cfg->getExit());
   }
+  // For nullable pointers we're only interested in intraprocedural CFGs.
+  // Exceptional edges should only exist in the presence
+  // of try-catch blocks.
+  else if (AddEHEdgeOnTry && TryTerminatedBlock)
+    addSuccessor(Block, TryTerminatedBlock);
 
   return VisitChildren(C);
 }
@@ -3459,6 +3480,23 @@ CFGBlock *CFGBuilder::VisitGCCAsmStmt(GCCAsmStmt *G, AddStmtChoice asc) {
 }
 
 CFGBlock *CFGBuilder::VisitForStmt(ForStmt *F) {
+  auto AddGuard = [F]() {
+    if (!F->getCond()) return true;
+    if (F->getCond()->getStmtClass() != Stmt::BinaryOperatorClass) return true;
+    auto *BO = cast<BinaryOperator>(F->getCond());
+    if (BO->getLHS()->getStmtClass() != Stmt::CallExprClass) return true;
+    auto *C = cast<CallExpr>(BO->getLHS());
+    return C->getDirectCallee()->getNameAsString() != "__loop__guard__";
+  }();
+  if (AddGuard) {
+    auto *DR = DeclRefExpr::Create(*Context, NestedNameSpecifierLoc{}, SourceLocation{}, LoopGuardFunc, false, F->getLParenLoc(), LoopGuardFunc->getType(), VK_LValue);
+    auto FPT = Context->getPointerType(LoopGuardFunc->getType());
+    auto *Cast = ImplicitCastExpr::Create(*Context, FPT, CK_FunctionToPointerDecay, DR, nullptr, VK_PRValue, {});
+    auto *GuardCall = CallExpr::Create(*Context, Cast, {}, Context->BoolTy, VK_PRValue, F->getLParenLoc(), {});
+    auto *B = BinaryOperator::Create(*Context, GuardCall, F->getCond(), BO_LAnd, Context->BoolTy, VK_PRValue, OK_Ordinary, F->getLParenLoc(), {});
+    F->setCond(B);
+  }
+
   CFGBlock *LoopSuccessor = nullptr;
 
   // Save local scope position because in case of condition variable ScopePos
@@ -3821,6 +3859,23 @@ CFGBlock *CFGBuilder::VisitPseudoObjectExpr(PseudoObjectExpr *E) {
 }
 
 CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
+  auto AddGuard = [W]() {
+    if (!W->getCond()) return true;
+    if (W->getCond()->getStmtClass() != Stmt::BinaryOperatorClass) return true;
+    auto *BO = cast<BinaryOperator>(W->getCond());
+    if (BO->getLHS()->getStmtClass() != Stmt::CallExprClass) return true;
+    auto *C = cast<CallExpr>(BO->getLHS());
+    return C->getDirectCallee()->getNameAsString() != "__loop__guard__";
+  }();
+  if (AddGuard) {
+    auto *DR = DeclRefExpr::Create(*Context, NestedNameSpecifierLoc{}, SourceLocation{}, LoopGuardFunc, false, W->getLParenLoc(), LoopGuardFunc->getType(), VK_LValue);
+    auto FPT = Context->getPointerType(LoopGuardFunc->getType());
+    auto *Cast = ImplicitCastExpr::Create(*Context, FPT, CK_FunctionToPointerDecay, DR, nullptr, VK_PRValue, {});
+    auto *GuardCall = CallExpr::Create(*Context, Cast, {}, Context->BoolTy, VK_PRValue, W->getLParenLoc(), {});
+    auto *B = BinaryOperator::Create(*Context, GuardCall, W->getCond(), BO_LAnd, Context->BoolTy, VK_PRValue, OK_Ordinary, W->getLParenLoc(), {});
+    W->setCond(B);
+  }
+
   CFGBlock *LoopSuccessor = nullptr;
 
   // Save local scope position because in case of condition variable ScopePos
@@ -3898,7 +3953,8 @@ CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
       if (Cond->isLogicalOp()) {
         std::tie(EntryConditionBlock, ExitConditionBlock) =
             VisitLogicalOperator(Cond, W, BodyBlock, LoopSuccessor);
-        break;
+        if (AddGuard)
+          break;
       }
 
     // The default case when not handling logical operators.
@@ -3913,21 +3969,22 @@ CFGBlock *CFGBuilder::VisitWhileStmt(WhileStmt *W) {
 
     // If this block contains a condition variable, add both the condition
     // variable and initializer to the CFG.
-    if (VarDecl *VD = W->getConditionVariable()) {
-      if (Expr *Init = VD->getInit()) {
-        autoCreateBlock();
-        const DeclStmt *DS = W->getConditionVariableDeclStmt();
-        assert(DS->isSingleDecl());
-        findConstructionContexts(
+    if (!AddGuard)
+      if (VarDecl *VD = W->getConditionVariable()) {
+        if (Expr *Init = VD->getInit()) {
+          autoCreateBlock();
+          const DeclStmt *DS = W->getConditionVariableDeclStmt();
+          assert(DS->isSingleDecl());
+          findConstructionContexts(
             ConstructionContextLayer::create(cfg->getBumpVectorContext(),
                                              const_cast<DeclStmt *>(DS)),
             Init);
-        appendStmt(Block, DS);
-        EntryConditionBlock = addStmt(Init);
-        assert(Block == EntryConditionBlock);
-        maybeAddScopeBeginForVarDecl(EntryConditionBlock, VD, C);
+          appendStmt(Block, DS);
+          EntryConditionBlock = addStmt(Init);
+          assert(Block == EntryConditionBlock);
+          maybeAddScopeBeginForVarDecl(EntryConditionBlock, VD, C);
+        }
       }
-    }
 
     if (Block && badCFG)
       return nullptr;
@@ -4136,6 +4193,23 @@ CFGBlock *CFGBuilder::VisitCXXTypeidExpr(CXXTypeidExpr *S, AddStmtChoice asc) {
 
 CFGBlock *CFGBuilder::VisitDoStmt(DoStmt *D) {
   CFGBlock *LoopSuccessor = nullptr;
+
+  auto AddGuard = [D]() {
+    if (!D->getCond()) return true;
+    if (D->getCond()->getStmtClass() != Stmt::BinaryOperatorClass) return true;
+    auto *BO = cast<BinaryOperator>(D->getCond());
+    if (BO->getLHS()->getStmtClass() != Stmt::CallExprClass) return true;
+    auto *C = cast<CallExpr>(BO->getLHS());
+    return C->getDirectCallee()->getNameAsString() != "__loop__guard__";
+  }();
+  if (AddGuard) {
+    auto *DR = DeclRefExpr::Create(*Context, NestedNameSpecifierLoc{}, SourceLocation{}, LoopGuardFunc, false, D->getWhileLoc(), LoopGuardFunc->getType(), VK_LValue);
+    auto FPT = Context->getPointerType(LoopGuardFunc->getType());
+    auto *Cast = ImplicitCastExpr::Create(*Context, FPT, CK_FunctionToPointerDecay, DR, nullptr, VK_PRValue, {});
+    auto *GuardCall = CallExpr::Create(*Context, Cast, {}, Context->BoolTy, VK_PRValue, D->getWhileLoc(), {});
+    auto *B = BinaryOperator::Create(*Context, GuardCall, D->getCond(), BO_LAnd, Context->BoolTy, VK_PRValue, OK_Ordinary, D->getWhileLoc(), {});
+    D->setCond(B);
+  }
 
   addLoopExit(D);
 

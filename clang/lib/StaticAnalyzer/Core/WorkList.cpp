@@ -22,6 +22,14 @@
 using namespace clang;
 using namespace ento;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 #define DEBUG_TYPE "WorkList"
 
 STATISTIC(MaxQueueSize, "Maximum size of the worklist");
@@ -79,10 +87,12 @@ public:
 WorkList::~WorkList() = default;
 
 std::unique_ptr<WorkList> WorkList::makeDFS() {
+  DUMP(llvm::outs() << "WORKLIST :: making DFS\n");
   return std::make_unique<DFS>();
 }
 
 std::unique_ptr<WorkList> WorkList::makeBFS() {
+  DUMP(llvm::outs() << "WORKLIST :: making BFS\n");
   return std::make_unique<BFS>();
 }
 
@@ -124,6 +134,7 @@ namespace {
 } // namespace
 
 std::unique_ptr<WorkList> WorkList::makeBFSBlockDFSContents() {
+  DUMP(llvm::outs() << "WORKLIST :: making BFSBlockDFSContents\n");
   return std::make_unique<BFSBlockDFSContents>();
 }
 
@@ -186,6 +197,7 @@ public:
 } // namespace
 
 std::unique_ptr<WorkList> WorkList::makeUnexploredFirst() {
+  DUMP(llvm::outs() << "WORKLIST :: making UnexploredFirst\n");
   return std::make_unique<UnexploredFirstStack>();
 }
 
@@ -243,6 +255,7 @@ public:
 } // namespace
 
 std::unique_ptr<WorkList> WorkList::makeUnexploredFirstPriorityQueue() {
+  DUMP(llvm::outs() << "WORKLIST :: making UnexploredFirstPriorityQueue\n");
   return std::make_unique<UnexploredFirstPriorityQueue>();
 }
 
@@ -297,5 +310,6 @@ public:
 }
 
 std::unique_ptr<WorkList> WorkList::makeUnexploredFirstPriorityLocationQueue() {
+  DUMP(llvm::outs() << "WORKLIST :: making UnexploredFirstPriorityLocationQueue\n");
   return std::make_unique<UnexploredFirstPriorityLocationQueue>();
 }

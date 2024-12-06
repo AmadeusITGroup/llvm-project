@@ -332,7 +332,14 @@ public:
                      ExplodedNode *Pred,
                      ExplodedNodeSet &Dst,
                      const CFGBlock *DstT,
-                     const CFGBlock *DstF);
+                     const CFGBlock *DstF,
+                     const Stmt *Loop = nullptr);
+
+  void processLoopBranch(const Stmt *Condition,
+                         ExplodedNode *Pred, ExplodedNodeSet &Dst);
+
+  void processJump(const Stmt *Term, NodeBuilderContext &BuilderCtx,
+                   ExplodedNode *Pred, ExplodedNodeSet &DstTop);
 
   /// Called by CoreEngine.
   /// Used to generate successor nodes for temporary destructors depending

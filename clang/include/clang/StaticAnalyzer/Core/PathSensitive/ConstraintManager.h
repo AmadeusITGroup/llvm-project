@@ -125,6 +125,9 @@ public:
   /// Convenience method to query the state to see if a symbol is null or
   /// not null, or if neither assumption can be made.
   ConditionTruthVal isNull(ProgramStateRef State, SymbolRef Sym) {
+#ifdef DEBUG_DUMP
+    llvm::outs() << "checking for null\n";
+#endif
     return checkNull(State, Sym);
   }
 

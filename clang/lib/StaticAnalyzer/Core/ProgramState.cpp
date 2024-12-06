@@ -24,6 +24,14 @@
 using namespace clang;
 using namespace ento;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 namespace clang { namespace  ento {
 /// Increments the number of times this state is referenced.
 
@@ -312,6 +320,15 @@ ProgramStateRef ProgramState::BindExpr(const Stmt *S,
   return getStateManager().getPersistentState(NewSt);
 }
 
+ProgramStateRef ProgramState::UnbindExpr(const Stmt *S, const LocationContext *LCtx) const {
+  Environment NewEnv = getStateManager().EnvMgr.unbindExpr(Env, EnvironmentEntry(S, LCtx));
+  if (NewEnv == Env) return this;
+
+  ProgramState NewSt = *this;
+  NewSt.Env = NewEnv;
+  return getStateManager().getPersistentState(NewSt);
+}
+
 [[nodiscard]] std::pair<ProgramStateRef, ProgramStateRef>
 ProgramState::assumeInBoundDual(DefinedOrUnknownSVal Idx,
                                 DefinedOrUnknownSVal UpperBound,
@@ -387,6 +404,8 @@ ConditionTruthVal ProgramState::isNull(SVal V) const {
   SymbolRef Sym = V.getAsSymbol(/* IncludeBaseRegion */ true);
   if (!Sym)
     return ConditionTruthVal();
+
+  DUMP(Sym->dump());
 
   return getStateManager().ConstraintMgr->isNull(this, Sym);
 }

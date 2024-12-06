@@ -363,6 +363,10 @@ public:
   void runCheckersForBranchCondition(const Stmt *condition,
                                      ExplodedNodeSet &Dst, ExplodedNode *Pred,
                                      ExprEngine &Eng);
+  void runCheckersForLoopCondition(const Stmt *loop,
+                                   const Stmt *condition,
+                                   ExplodedNodeSet &Dst, ExplodedNode *Pred,
+                                   ExprEngine &Eng);
 
   /// Run checkers between C++ operator new and constructor calls.
   void runCheckersForNewAllocator(const CXXAllocatorCall &Call,
@@ -507,6 +511,9 @@ public:
   using CheckBranchConditionFunc =
       CheckerFn<void (const Stmt *, CheckerContext &)>;
 
+  using CheckLoopConditionFunc =
+      CheckerFn<void (const Stmt *, const Stmt *, CheckerContext &)>;
+
   using CheckNewAllocatorFunc =
       CheckerFn<void(const CXXAllocatorCall &Call, CheckerContext &)>;
 
@@ -564,6 +571,7 @@ public:
   void _registerForEndFunction(CheckEndFunctionFunc checkfn);
 
   void _registerForBranchCondition(CheckBranchConditionFunc checkfn);
+  void _registerForLoopCondition(CheckLoopConditionFunc checkfn);
 
   void _registerForNewAllocator(CheckNewAllocatorFunc checkfn);
 
@@ -675,6 +683,8 @@ private:
   std::vector<CheckEndFunctionFunc> EndFunctionCheckers;
 
   std::vector<CheckBranchConditionFunc> BranchConditionCheckers;
+
+  std::vector<CheckLoopConditionFunc> LoopConditionCheckers;
 
   std::vector<CheckNewAllocatorFunc> NewAllocatorCheckers;
 

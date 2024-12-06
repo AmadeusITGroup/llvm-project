@@ -205,9 +205,15 @@ bool nonloc::PointerToMember::isNullMemberPointer() const {
   return getPTMData().isNull();
 }
 
+const UnknownPointerToMemberData nonloc::PointerToMember::UnknownData {};
+
+bool nonloc::PointerToMember::isUnknownMemberPointer() const {
+  return getPTMData().is<const UnknownPointerToMemberData *>();
+}
+
 const NamedDecl *nonloc::PointerToMember::getDecl() const {
   const auto PTMD = this->getPTMData();
-  if (PTMD.isNull())
+  if (PTMD.isNull() || isUnknownMemberPointer())
     return nullptr;
 
   const NamedDecl *ND = nullptr;
@@ -233,14 +239,14 @@ nonloc::CompoundVal::iterator nonloc::CompoundVal::end() const {
 
 nonloc::PointerToMember::iterator nonloc::PointerToMember::begin() const {
   const PTMDataType PTMD = getPTMData();
-  if (PTMD.is<const NamedDecl *>())
+  if (PTMD.is<const NamedDecl *>() || isUnknownMemberPointer())
     return {};
   return PTMD.get<const PointerToMemberData *>()->begin();
 }
 
 nonloc::PointerToMember::iterator nonloc::PointerToMember::end() const {
   const PTMDataType PTMD = getPTMData();
-  if (PTMD.is<const NamedDecl *>())
+  if (PTMD.is<const NamedDecl *>() || isUnknownMemberPointer())
     return {};
   return PTMD.get<const PointerToMemberData *>()->end();
 }
@@ -283,6 +289,10 @@ void SVal::printJson(raw_ostream &Out, bool AddQuotes) const {
 void SVal::dumpToStream(raw_ostream &os) const {
   switch (getBaseKind()) {
     case UnknownValKind:
+      if (isUnknownNullable()) {
+        castAs<UnknownNullableSVal>().dumpToStream(os);
+        break;
+      }
       os << "Unknown";
       break;
     case NonLocKind:
@@ -295,6 +305,30 @@ void SVal::dumpToStream(raw_ostream &os) const {
       os << "Undefined";
       break;
   }
+}
+
+const UnknownNullableSVal::NullConstraint UnknownNullableSVal::IsNullConstraint = UnknownNullableSVal::NullConstraint::IsNull;
+const UnknownNullableSVal::NullConstraint UnknownNullableSVal::IsNotNullConstraint = UnknownNullableSVal::NullConstraint::IsNotNull;
+const UnknownNullableSVal::NullConstraint UnknownNullableSVal::UnknownConstraint = UnknownNullableSVal::NullConstraint::Unknown;
+
+const UnknownNullableSVal UnknownNullableSVal::Unconstrained = UnknownNullableSVal(UnknownConstraint);
+const UnknownNullableSVal UnknownNullableSVal::NotNull = UnknownNullableSVal(IsNotNullConstraint);
+const UnknownNullableSVal UnknownNullableSVal::Null = UnknownNullableSVal(IsNullConstraint);
+
+void UnknownNullableSVal::dumpToStream(raw_ostream &os) const {
+  os << "Unknown{";
+  switch (getConstraint()) {
+    case NullConstraint::IsNotNull:
+      os << "not-null";
+      break;
+    case NullConstraint::IsNull:
+      os << "null";
+      break;
+    case NullConstraint::Unknown:
+      os << "unknown";
+      break;
+  }
+  os << "}";
 }
 
 void NonLoc::dumpToStream(raw_ostream &os) const {
@@ -353,6 +387,8 @@ void NonLoc::dumpToStream(raw_ostream &os) const {
 
         os << I->getType();
       }
+      if (CastRes.isUnknownMemberPointer())
+        os << "unknown";
 
       os << '}';
       break;

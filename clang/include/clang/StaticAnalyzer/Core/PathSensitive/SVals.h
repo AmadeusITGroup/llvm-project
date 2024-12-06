@@ -44,6 +44,7 @@ class CompoundValData;
 class LazyCompoundValData;
 class MemRegion;
 class PointerToMemberData;
+struct UnknownPointerToMemberData;
 class SValBuilder;
 class TypedValueRegion;
 
@@ -80,6 +81,8 @@ public:
   };
   enum { BaseBits = 2, BaseMask = 0b11 };
 
+  static constexpr unsigned int LastBit = (1u << (std::numeric_limits<unsigned>::digits - 1));
+  static constexpr unsigned UnknownNullableValKind = UnknownValKind | LastBit;
 protected:
   const void *Data = nullptr;
 
@@ -91,6 +94,8 @@ protected:
       : Data(d), Kind((isLoc ? LocKind : NonLocKind) | (ValKind << BaseBits)) {}
 
   explicit SVal(BaseKind k, const void *D = nullptr) : Data(D), Kind(k) {}
+
+  unsigned getRawKindWithoutLastBit() const { return getRawKind() & ~LastBit; }
 
 public:
   explicit SVal() = default;
@@ -123,19 +128,33 @@ public:
   bool operator!=(SVal R) const { return !(*this == R); }
 
   bool isUnknown() const {
-    return getRawKind() == UnknownValKind;
+    return getRawKindWithoutLastBit() == UnknownValKind;
+    // return getRawKind() == UnknownValKind;
+  }
+
+  bool isUnknownNullable() const {
+    return getRawKind() == UnknownNullableValKind;
+  }
+
+  bool isPureUnknown() const {
+    return isUnknown() && !isUnknownNullable();
   }
 
   bool isUndef() const {
-    return getRawKind() == UndefinedValKind;
+    return getRawKindWithoutLastBit() == UndefinedValKind;
   }
 
   bool isUnknownOrUndef() const {
-    return getRawKind() <= UnknownValKind;
+    return getRawKindWithoutLastBit() <= UnknownValKind;
+    // return getRawKind() <= UnknownValKind;
+  }
+
+  bool isPureUnknownOrUndef() const {
+    return isUnknownOrUndef() && !isUnknownNullable();
   }
 
   bool isValid() const {
-    return getRawKind() > UnknownValKind;
+    return getRawKindWithoutLastBit() > UnknownValKind;
   }
 
   bool isConstant() const;
@@ -235,6 +254,50 @@ public:
   static bool classof(SVal V) { return V.getBaseKind() == UnknownValKind; }
 };
 
+
+class UnknownNullableSVal : public DefinedOrUnknownSVal {
+public:
+  enum class NullConstraint { IsNull, IsNotNull, Unknown };
+private:
+  static const NullConstraint IsNullConstraint;
+  static const NullConstraint IsNotNullConstraint;
+  static const NullConstraint UnknownConstraint;
+  static void *getData(NullConstraint C) {
+    switch(C) {
+      case NullConstraint::IsNull:
+        return const_cast<NullConstraint*>(&IsNullConstraint);
+      case NullConstraint::IsNotNull:
+        return const_cast<NullConstraint*>(&IsNotNullConstraint);
+      case NullConstraint::Unknown:
+        return const_cast<NullConstraint*>(&UnknownConstraint);
+    }
+  }
+
+public:
+
+  explicit UnknownNullableSVal(NullConstraint C) :
+    DefinedOrUnknownSVal(UnknownValKind, getData(C)) {
+    // we need to set the Kind st the Nullable bit is on
+    Kind = UnknownNullableValKind;
+  };
+
+  static bool classof(SVal V) { return V.getRawKind() == UnknownNullableValKind; }
+
+  NullConstraint getConstraint() const {
+    return *static_cast<const NullConstraint*>(Data);
+  }
+
+  bool isNull() const { return getConstraint() == NullConstraint::IsNull; }
+  bool isNotNull() const { return getConstraint() == NullConstraint::IsNotNull; }
+  bool isConstrained() const { return getConstraint() != NullConstraint::Unknown; }
+
+  void dumpToStream(raw_ostream &os) const;
+
+  static const UnknownNullableSVal Unconstrained;
+  static const UnknownNullableSVal NotNull;
+  static const UnknownNullableSVal Null;
+};
+
 class DefinedSVal : public DefinedOrUnknownSVal {
 public:
   // We want calling these methods to be a compiler error since they are
@@ -284,7 +347,7 @@ public:
 
   static bool isLocType(QualType T) {
     return T->isAnyPointerType() || T->isBlockPointerType() ||
-           T->isReferenceType() || T->isNullPtrType();
+           T->isReferenceType() || T->isNullPtrType() || T->isMemberPointerType();
   }
 
   static bool classof(SVal V) { return V.getBaseKind() == LocKind; }
@@ -437,15 +500,17 @@ public:
 class PointerToMember : public NonLoc {
   friend class ento::SValBuilder;
 
+  static const UnknownPointerToMemberData UnknownData;
 public:
   using PTMDataType =
-      llvm::PointerUnion<const NamedDecl *, const PointerToMemberData *>;
+      llvm::PointerUnion<const NamedDecl *, const PointerToMemberData *, const UnknownPointerToMemberData *>;
 
   const PTMDataType getPTMData() const {
     return PTMDataType::getFromOpaqueValue(const_cast<void *>(Data));
   }
 
   bool isNullMemberPointer() const;
+  bool isUnknownMemberPointer() const;
 
   const NamedDecl *getDecl() const;
 

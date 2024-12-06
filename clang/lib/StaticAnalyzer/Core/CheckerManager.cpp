@@ -43,6 +43,7 @@ bool CheckerManager::hasPathSensitiveCheckers() const {
       PostObjCMessageCheckers, PreCallCheckers, PostCallCheckers,
       LocationCheckers, BindCheckers, EndAnalysisCheckers,
       BeginFunctionCheckers, EndFunctionCheckers, BranchConditionCheckers,
+      LoopConditionCheckers,
       NewAllocatorCheckers, LiveSymbolsCheckers, DeadSymbolsCheckers,
       RegionChangesCheckers, PointerEscapeCheckers, EvalAssumeCheckers,
       EvalCallCheckers, EndOfTranslationUnitCheckers);
@@ -486,6 +487,30 @@ namespace {
     }
   };
 
+  struct CheckLoopConditionContext {
+    using CheckersTy = std::vector<CheckerManager::CheckLoopConditionFunc>;
+
+    const CheckersTy &Checkers;
+    const Stmt *Loop;
+    const Stmt *Condition;
+    ExprEngine &Eng;
+
+    CheckLoopConditionContext(const CheckersTy &checkers,
+                              const Stmt *Loop, const Stmt *Cond, ExprEngine &eng)
+      : Checkers(checkers), Loop(Loop), Condition(Cond), Eng(eng) {}
+
+    CheckersTy::const_iterator checkers_begin() { return Checkers.begin(); }
+    CheckersTy::const_iterator checkers_end() { return Checkers.end(); }
+
+    void runChecker(CheckerManager::CheckLoopConditionFunc checkFn,
+                    NodeBuilder &Bldr, ExplodedNode *Pred) {
+      ProgramPoint L = PostCondition(Condition, Pred->getLocationContext(),
+                                     checkFn.Checker);
+      CheckerContext C(Bldr, Eng, Pred, L);
+      checkFn(Loop, Condition, C);
+    }
+  };
+
 } // namespace
 
 /// Run checkers for branch condition.
@@ -496,6 +521,17 @@ void CheckerManager::runCheckersForBranchCondition(const Stmt *Condition,
   ExplodedNodeSet Src;
   Src.insert(Pred);
   CheckBranchConditionContext C(BranchConditionCheckers, Condition, Eng);
+  expandGraphWithCheckers(C, Dst, Src);
+}
+
+void CheckerManager::runCheckersForLoopCondition(const Stmt *Loop,
+                                                 const Stmt *Condition,
+                                                 ExplodedNodeSet &Dst,
+                                                 ExplodedNode *Pred,
+                                                 ExprEngine &Eng) {
+  ExplodedNodeSet Src;
+  Src.insert(Pred);
+  CheckLoopConditionContext C(LoopConditionCheckers, Loop, Condition, Eng);
   expandGraphWithCheckers(C, Dst, Src);
 }
 
@@ -858,6 +894,11 @@ void CheckerManager::_registerForEndFunction(CheckEndFunctionFunc checkfn) {
 void CheckerManager::_registerForBranchCondition(
                                              CheckBranchConditionFunc checkfn) {
   BranchConditionCheckers.push_back(checkfn);
+}
+
+void CheckerManager::_registerForLoopCondition(
+                                             CheckLoopConditionFunc checkfn) {
+  LoopConditionCheckers.push_back(checkfn);
 }
 
 void CheckerManager::_registerForNewAllocator(CheckNewAllocatorFunc checkfn) {

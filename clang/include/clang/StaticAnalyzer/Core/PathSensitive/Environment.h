@@ -113,6 +113,8 @@ public:
   Environment bindExpr(Environment Env, const EnvironmentEntry &E, SVal V,
                        bool Invalidate);
 
+  Environment unbindExpr(Environment Env, const EnvironmentEntry &E);
+
   Environment removeDeadBindings(Environment Env,
                                  SymbolReaper &SymReaper,
                                  ProgramStateRef state);

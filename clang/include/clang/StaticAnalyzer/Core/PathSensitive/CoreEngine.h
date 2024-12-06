@@ -119,6 +119,8 @@ private:
 
   void HandleBranch(const Stmt *Cond, const Stmt *Term, const CFGBlock *B,
                     ExplodedNode *Pred);
+  void HandleJump(const Stmt *Term, const CFGBlock *B, ExplodedNode *Pred);
+
   void HandleCleanupTemporaryBranch(const CXXBindTemporaryExpr *BTE,
                                     const CFGBlock *B, ExplodedNode *Pred);
 

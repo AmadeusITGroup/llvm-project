@@ -31,6 +31,14 @@
 using namespace clang;
 using namespace ento;
 
+// #define DEBUG_DUMP 1
+
+#ifdef DEBUG_DUMP
+#define DUMP(Stmt) do { Stmt; } while (false)
+#else
+#define DUMP(Stmt) do { } while(false)
+#endif
+
 // This class can be extended with other tables which will help to reason
 // about ranges more precisely.
 class OperatorRelationsTable {
@@ -2835,11 +2843,17 @@ bool RangeConstraintManager::canReasonAbout(SVal X) const {
 
 ConditionTruthVal RangeConstraintManager::checkNull(ProgramStateRef State,
                                                     SymbolRef Sym) {
+  DUMP(llvm::outs() << "CONSTRAINT MANAGER :: checking nullness of symbol: ");
+  DUMP(Sym->dump());
+  DUMP(llvm::outs() << "\n");
+
   const RangeSet *Ranges = getConstraint(State, Sym);
 
   // If we don't have any information about this symbol, it's underconstrained.
-  if (!Ranges)
+  if (!Ranges) {
+    DUMP(llvm::outs() << "CONSTRAINT MANAGER :: no constraint\n");
     return ConditionTruthVal();
+  }
 
   // If we have a concrete value, see if it's zero.
   if (const llvm::APSInt *Value = Ranges->getConcreteValue())
@@ -2852,6 +2866,8 @@ ConditionTruthVal RangeConstraintManager::checkNull(ProgramStateRef State,
   // Check if zero is in the set of possible values.
   if (!Ranges->contains(Zero))
     return false;
+
+  DUMP(llvm::outs() << "CONSTRAINT MANAGER :: no concreteness\n");
 
   // Zero is a possible value, but it is not the /only/ possible value.
   return ConditionTruthVal();

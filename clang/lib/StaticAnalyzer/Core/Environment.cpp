@@ -15,6 +15,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Stmt.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Basic/JsonSupport.h"
@@ -137,13 +138,50 @@ Environment EnvironmentManager::bindExpr(Environment Env,
                                          const EnvironmentEntry &E,
                                          SVal V,
                                          bool Invalidate) {
-  if (V.isUnknown()) {
+  if (V.isPureUnknown()) {
     if (Invalidate)
       return Environment(F.remove(Env.ExprBindings, E));
     else
       return Env;
   }
   return Environment(F.add(Env.ExprBindings, E, V));
+}
+
+Environment EnvironmentManager::unbindExpr(Environment Env, const EnvironmentEntry &E) {
+  return Environment(F.remove(Env.ExprBindings, E));
+  // struct ExprCleaner : ConstStmtVisitor<ExprCleaner> {
+  //   ExprCleaner(FactoryTy &F, Environment Env, const LocationContext *L) : F(F), Env(Env), L(L) {}
+
+  //   void VisitChildren(const Stmt *S) {
+  //     for (const auto *Child : S->children())
+  //       if (Child) Visit(Child);
+  //   }
+
+  //   void VisitDeclRefExpr(const DeclRefExpr */*E*/) {}
+  //   void VisitiImplicitCastExpr(const ImplicitCastExpr *E) {
+  //     if (E->getCastKind() == CK_PointerToBoolean || E->getCastKind() == CK_MemberPointerToBoolean)
+  //       removeBinding(E);
+  //     if (E->getCastKind() != CK_LValueToRValue)
+  //       VisitChildren(E);
+  //   }
+
+  //   void VisitStmt(const Stmt *S) {
+  //     removeBinding(S);
+  //     VisitChildren(S);
+  //   }
+
+  //   void removeBinding(const Stmt *S) {
+  //     Env = Environment(F.remove(Env.ExprBindings, EnvironmentEntry(S, L)));
+  //   }
+
+  //   FactoryTy &F;
+  //   Environment Env;
+  //   const LocationContext *L;
+  // } Cleaner(F, Env, E.getLocationContext());
+
+  // Cleaner.Visit(E.getStmt());
+
+  // return Cleaner.Env;
 }
 
 namespace {

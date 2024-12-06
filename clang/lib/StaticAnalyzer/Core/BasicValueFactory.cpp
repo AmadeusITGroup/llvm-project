@@ -196,7 +196,7 @@ const PointerToMemberData *BasicValueFactory::accumCXXBase(
   const NamedDecl *ND = nullptr;
   llvm::ImmutableList<const CXXBaseSpecifier *> BaseSpecList;
 
-  if (PTMDT.isNull() || PTMDT.is<const NamedDecl *>()) {
+  if (PTMDT.isNull() || PTM.isUnknownMemberPointer() || PTMDT.is<const NamedDecl *>()) {
     if (PTMDT.is<const NamedDecl *>())
       ND = PTMDT.get<const NamedDecl *>();
 

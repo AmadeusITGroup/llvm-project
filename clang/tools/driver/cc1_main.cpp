@@ -213,6 +213,15 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   bool Success = CompilerInvocation::CreateFromArgs(Clang->getInvocation(),
                                                     Argv, Diags, Argv0);
 
+  if (Clang->getLangOpts().NullablePointers) {
+    Clang->getFrontendOpts().ProgramAction = frontend::RunAnalysis;
+    auto AnalyzerOpts = Clang->getAnalyzerOpts();
+    AnalyzerOpts->AnalyzerWerror = true;
+    AnalyzerOpts->AnalysisDiagOpt = PD_TEXT;
+    AnalyzerOpts->CheckersAndPackages.clear();
+    AnalyzerOpts->CheckersAndPackages.emplace_back("amadeus.NullablePointers", true);
+  }
+
   if (!Clang->getFrontendOpts().TimeTracePath.empty()) {
     llvm::timeTraceProfilerInitialize(
         Clang->getFrontendOpts().TimeTraceGranularity, Argv0);

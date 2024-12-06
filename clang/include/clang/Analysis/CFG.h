@@ -1191,6 +1191,7 @@ public:
     CFGCallback *Observer = nullptr;
     bool PruneTriviallyFalseEdges = true;
     bool AddEHEdges = false;
+    bool AddEHEdgesOnTry = false;
     bool AddInitializers = false;
     bool AddImplicitDtors = false;
     bool AddLifetime = false;
